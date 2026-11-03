@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "transaction_id": "tx_c04f580c7ad8",
+    "timestamp": "2026-11-03T23:51:44.912386+00:00",
+    "amount": "15.00",
+    "recipient": "V",
+    "status": "REJECTED",
+    "reason": "Invalid human authorization attempt. 2 attempt(s) remaining before wallet is locked.",
+    "balance_after": "100.00",
+    "lifetime_spent_after": "0.00",
+    "requires_human_approval": true,
+    "human_approved": true,
+    "agent_id": null,
+    "attempt_number": null
+  },
+  {
+    "transaction_id": "tx_b96804d0a690",
+    "timestamp": "2026-11-03T23:51:44.912544+00:00",
+    "amount": "15.00",
+    "recipient": "V",
+    "status": "REJECTED",
+    "reason": "Invalid human authorization attempt. 1 attempt(s) remaining before wallet is locked.",
+    "balance_after": "100.00",
+    "lifetime_spent_after": "0.00",
+    "requires_human_approval": true,
+    "human_approved": true,
+    "agent_id": null,
+    "attempt_number": null
+  },
+  {
+    "transaction_id": "tx_1084c5ceda79",
+    "timestamp": "2026-11-03T23:51:44.912682+00:00",
+    "amount": "15.00",
+    "recipient": "V",
+    "status": "REJECTED",
+    "reason": "Invalid human authorization attempt. Wallet locked after 3 failed attempts.",
+    "balance_after": "100.00",
+    "lifetime_spent_after": "0.00",
+    "requires_human_approval": true,
+    "human_approved": true,
+    "agent_id": null,
+    "attempt_number": null
+  }
+]

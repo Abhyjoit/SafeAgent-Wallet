@@ -8,10 +8,11 @@ This module handles:
 3. Human authorization protection (locks after 3 invalid attempts, ignores normal rejections).
 """
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import threading
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from config import (
     DEFAULT_AUTH_TOKEN,
@@ -60,16 +61,19 @@ class RateLimiter:
     Thread-safe rolling window rate limiter.
 
     Enforces a maximum number of requests within a rolling time window.
-    Crucially: REJECTED requests are also recorded and counted toward the rate limit.
+    Crucially: REJECTED and BLOCKED requests are also recorded and counted toward the rate limit.
+    Supports a mockable clock for deterministic, sleep-free testing.
     """
 
     def __init__(
         self,
         max_requests: int = RATE_LIMIT_MAX_REQUESTS,
         window_seconds: float = RATE_LIMIT_WINDOW_SECONDS,
+        clock_fn: Optional[Callable[[], float]] = None,
     ):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.clock_fn: Callable[[], float] = clock_fn or time.time
         self._timestamps: list[float] = []
         self._lock = threading.Lock()
 
@@ -81,7 +85,7 @@ class RateLimiter:
         Returns:
             (is_allowed, error_message)
         """
-        now = time.time() if current_time is None else current_time
+        now = self.clock_fn() if current_time is None else current_time
 
         with self._lock:
             # Purge timestamps outside the rolling window
@@ -90,7 +94,7 @@ class RateLimiter:
 
             # Check if current request exceeds allowed threshold
             if len(self._timestamps) >= self.max_requests:
-                # Count this rejected request too!
+                # Count this rejected/blocked request too!
                 self._timestamps.append(now)
                 oldest_in_window = self._timestamps[0]
                 wait_seconds = max(0.1, round(self.window_seconds - (now - oldest_in_window), 1))
@@ -104,9 +108,20 @@ class RateLimiter:
             self._timestamps.append(now)
             return True, None
 
+    def record_attempt(self, current_time: Optional[float] = None) -> int:
+        """
+        Records an attempt into the rolling window (e.g. when blocked) and returns count.
+        """
+        now = self.clock_fn() if current_time is None else current_time
+        with self._lock:
+            cutoff = now - self.window_seconds
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+            self._timestamps.append(now)
+            return len(self._timestamps)
+
     def get_request_count(self, current_time: Optional[float] = None) -> int:
         """Returns the number of requests recorded within the current rolling window."""
-        now = time.time() if current_time is None else current_time
+        now = self.clock_fn() if current_time is None else current_time
         with self._lock:
             cutoff = now - self.window_seconds
             return len([t for t in self._timestamps if t > cutoff])
@@ -119,12 +134,12 @@ class RateLimiter:
 
 class AuthorizationGuard:
     """
-    Protects transactions requiring human approval.
+    Protects transactions requiring human approval and handles wallet locking.
 
     Rules:
     - Locks wallet after MAX_INVALID_AUTH_ATTEMPTS (3) failed authorization attempts.
+    - Locks wallet immediately upon runaway agent rate limit breach (attempt 4+).
     - A normal human rejection (human says NO) does NOT count as an invalid authorization attempt.
-    - An invalid authorization attempt occurs when approval is attempted with an invalid token/credential.
     """
 
     def __init__(
@@ -136,12 +151,24 @@ class AuthorizationGuard:
         self.expected_token = expected_token
         self._invalid_attempts: int = 0
         self._is_locked: bool = False
+        self._lock_reason: Optional[str] = None
+        self._lock_timestamp: Optional[str] = None
         self._lock = threading.Lock()
 
     @property
     def is_locked(self) -> bool:
         with self._lock:
             return self._is_locked
+
+    @property
+    def lock_reason(self) -> Optional[str]:
+        with self._lock:
+            return self._lock_reason
+
+    @property
+    def lock_timestamp(self) -> Optional[str]:
+        with self._lock:
+            return self._lock_timestamp
 
     @property
     def invalid_attempts(self) -> int:
@@ -191,13 +218,17 @@ class AuthorizationGuard:
         """
         return "Payment rejected by human reviewer."
 
-    def lock(self) -> None:
+    def lock(self, reason: Optional[str] = None) -> None:
         """Explicitly locks the wallet."""
         with self._lock:
             self._is_locked = True
+            self._lock_reason = reason or "Wallet is locked."
+            self._lock_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     def unlock(self) -> None:
         """Unlocks the wallet and resets invalid attempts."""
         with self._lock:
             self._is_locked = False
             self._invalid_attempts = 0
+            self._lock_reason = None
+            self._lock_timestamp = None

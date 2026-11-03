@@ -225,6 +225,43 @@ st.markdown(
         font-size: 0.75rem;
         font-weight: 700;
     }
+    .badge-blocked {
+        background: rgba(239, 68, 68, 0.3);
+        color: #FCA5A5;
+        border: 1px solid rgba(239, 68, 68, 0.7);
+        border-radius: 9999px;
+        padding: 4px 12px;
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+    }
+    .runaway-alert-box {
+        background: linear-gradient(135deg, rgba(88, 28, 28, 0.92) 0%, rgba(30, 20, 28, 0.96) 100%);
+        backdrop-filter: blur(16px);
+        border: 2px solid #EF4444;
+        border-radius: 16px;
+        padding: 22px 26px;
+        margin-bottom: 24px;
+        box-shadow: 0 10px 30px rgba(239, 68, 68, 0.3), 0 0 25px rgba(239, 68, 68, 0.2);
+    }
+    .runaway-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 8px;
+    }
+    .runaway-meta-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-top: 12px;
+        font-size: 0.85rem;
+        color: #E2E8F0;
+    }
     .badge-auto {
         background: rgba(16, 185, 129, 0.15);
         color: #34D399;
@@ -335,6 +372,9 @@ if "buyer_agent" not in st.session_state:
 if "last_agent_result" not in st.session_state:
     st.session_state.last_agent_result = None
 
+if "simulation_results" not in st.session_state:
+    st.session_state.simulation_results = None
+
 if "approval_alert" not in st.session_state:
     st.session_state.approval_alert = None
 
@@ -364,6 +404,21 @@ def handle_agent_purchase(user_query: str) -> None:
             f"⚠️ Purchase directive '{user_query}' requires human authorization. "
             f"Review it in the Approval Center."
         )
+
+
+def handle_runaway_simulation() -> None:
+    """Executes the controlled 10-attempt runaway agent attack simulation."""
+    results = wallet.simulate_runaway_agent_attack(
+        attempts=10,
+        amount=Decimal("4.50"),
+        recipient="USB-C Cable (CableCraft Direct)",
+        agent_id="SafeAgent Buyer Bot v1.0",
+    )
+    st.session_state.simulation_results = results
+    st.session_state.approval_alert = (
+        "🚨 Runaway Agent Simulation Executed: 10 rapid purchase attempts generated. "
+        "Attempts 1–3 allowed, Attempt 4 rate-limited, Attempts 5–10 blocked by locked wallet."
+    )
 
 
 def handle_approval_action(req_id: str, auth_token: str, confirmed: bool = True) -> None:
@@ -405,6 +460,7 @@ def handle_reset_all() -> None:
     marketplace.reset_catalog()
     approval_center.clear()
     st.session_state.last_agent_result = None
+    st.session_state.simulation_results = None
     st.session_state.approval_alert = "🔄 Wallet & Marketplace reset to $100.00 pristine state."
 
 
@@ -452,6 +508,7 @@ with st.sidebar:
         "Navigation",
         [
             "📊 Dashboard",
+            "🚨 Runaway Agent Simulator",
             "🛒 Marketplace",
             approval_nav_label,
             "📋 Transaction History",
@@ -471,6 +528,7 @@ with st.sidebar:
     st.markdown(f"**Rate Limit:** `{current_requests} / {config.RATE_LIMIT_MAX_REQUESTS}` in 60s")
     failed_attempts = wallet.invalid_auth_attempts
     st.markdown(f"**Failed Auth:** `{failed_attempts} / {config.MAX_INVALID_AUTH_ATTEMPTS}` attempts")
+    st.markdown(f"**Blocked Attempts:** `{wallet.blocked_attempts_count}` recorded")
 
     st.divider()
 
@@ -508,6 +566,63 @@ with h_col2:
     )
 
 st.write("")
+
+# -----------------------------------------------------------------------------
+# PROMINENT SECURITY ALERT: RUNAWAY AGENT ATTACK DETECTION
+# -----------------------------------------------------------------------------
+alert_info = wallet.runaway_alert
+is_rate_locked = wallet.is_locked and (config.REASON_RATE_LIMIT_EXCEEDED in str(wallet.lock_reason) or alert_info is not None)
+
+if is_rate_locked or alert_info:
+    agent_name = alert_info.get("agent_id", "SafeAgent Buyer Bot v1.0") if alert_info else "SafeAgent Buyer Bot v1.0"
+    attempts_cnt = alert_info.get("attempts_count", 10) if alert_info else 10
+    lock_time = alert_info.get("lock_timestamp", wallet.lock_timestamp or "Just now") if alert_info else (wallet.lock_timestamp or "Just now")
+    blocked_cnt = wallet.blocked_attempts_count
+
+    st.markdown(
+        f"""
+        <div class="runaway-alert-box">
+            <div class="runaway-header">
+                <span style="font-size: 2.2rem;">🚨</span>
+                <div>
+                    <div style="font-size: 1.25rem; font-weight: 800; color: #FFFFFF; letter-spacing: -0.01em;">
+                        🚨 RUNAWAY AGENT DETECTED: Your AI agent exceeded the permitted purchase rate ({config.RATE_LIMIT_MAX_REQUESTS} transactions per {int(config.RATE_LIMIT_WINDOW_SECONDS)} seconds).
+                    </div>
+                    <div style="font-size: 0.9rem; color: #FCA5A5; margin-top: 3px;">
+                        Wallet has been automatically locked to protect your funds. No further automated or approved payments can execute.
+                    </div>
+                </div>
+            </div>
+            <div class="runaway-meta-grid">
+                <div>
+                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Agent ID</div>
+                    <div style="color: #38BDF8; font-weight: 700; margin-top: 2px;">🤖 {html.escape(agent_name)}</div>
+                </div>
+                <div>
+                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Rate Violation</div>
+                    <div style="color: #F87171; font-weight: 700; margin-top: 2px;">⚡ {attempts_cnt} attempts in 60s window</div>
+                </div>
+                <div>
+                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Lock Timestamp</div>
+                    <div style="font-weight: 600; margin-top: 2px;">🕒 {html.escape(str(lock_time))}</div>
+                </div>
+                <div>
+                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Blocked Transactions</div>
+                    <div style="color: #FCA5A5; font-weight: 800; margin-top: 2px;">🛑 {blocked_cnt} attempts blocked</div>
+                </div>
+                <div>
+                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Wallet Status</div>
+                    <div style="margin-top: 2px;"><span class="badge-blocked">🔒 LOCKED</span></div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_al1, col_al2 = st.columns([4, 1])
+    with col_al2:
+        st.button("🔓 Admin Unlock Wallet", on_click=handle_unlock_wallet, type="primary", key="top_alert_unlock_btn", width="stretch")
+    st.write("")
 
 # Wallet Overview Cards (Live values from SafeAgentWallet)
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -819,6 +934,230 @@ elif "Dashboard" in nav_selection:
                 unsafe_allow_html=True,
             )
 
+    # -------------------------------------------------------------------------
+    # RUNAWAY AGENT SIMULATOR SECTION (DASHBOARD)
+    # -------------------------------------------------------------------------
+    st.divider()
+    st.markdown("### 🚨 Runaway Agent Defense Simulator")
+    st.markdown(
+        "Test wallet resilience against a malfunctioning AI agent executing high-frequency payments in rapid succession. "
+        "Evaluates the rolling 60-second rate limiter (max 3 permitted), automatic wallet lockdown on attempt 4, and blocked attempt recording."
+    )
+
+    r_col1, r_col2 = st.columns([3, 1])
+    with r_col1:
+        st.markdown(
+            """
+            <div style="background: rgba(19, 26, 43, 0.7); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; padding: 16px 20px;">
+                <b style="color: #FCA5A5; font-size: 0.95rem;">🚨 Security Attack Scenario:</b> Sequence of 10 rapid purchase attempts from <code>SafeAgent Buyer Bot v1.0</code> ($4.50 each).<br>
+                <div style="font-size: 0.84rem; color: #94A3B8; margin-top: 6px; line-height: 1.5;">
+                    • <b>Attempts 1–3:</b> Allowed by wallet security policy ($4.50 each = $13.50 total deducted).<br>
+                    • <b>Attempt 4:</b> Rate limit breached (<code>RATE_LIMIT_EXCEEDED</code>). Wallet auto-locks instantly.<br>
+                    • <b>Attempts 5–10:</b> Blocked by locked wallet (<code>WALLET_LOCKED</code>) with $0 deducted.<br>
+                    • <b>Fund Preservation:</b> Exactly $31.50 saved from unauthorized rogue spending.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with r_col2:
+        st.write("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.button(
+            "🚨 Simulate Runaway Agent Attack",
+            on_click=handle_runaway_simulation,
+            type="primary",
+            key="dash_sim_attack_btn",
+            width="stretch",
+            help="Generates exactly 10 rapid payment attempts to test runaway security policy.",
+        )
+        if wallet.is_locked:
+            st.button(
+                "🔓 Admin Unlock Wallet",
+                on_click=handle_unlock_wallet,
+                key="dash_sim_unlock_btn",
+                width="stretch",
+                help="Administratively restore wallet after simulation.",
+            )
+
+    # Render Simulation Results Table if simulation was executed
+    if st.session_state.simulation_results:
+        st.write("")
+        st.markdown("#### 🛡️ Runaway Agent Simulation Outcome")
+        sim_results: List[PaymentResult] = st.session_state.simulation_results
+
+        # Summary Metrics
+        sim_succ = sum(1 for r in sim_results if r.success)
+        sim_block = sum(1 for r in sim_results if not r.success)
+        sim_spent = sum(r.amount for r in sim_results if r.success)
+        sim_saved = sum(r.amount for r in sim_results if not r.success)
+
+        sm1, sm2, sm3, sm4 = st.columns(4)
+        with sm1:
+            st.metric("Total Attempts", len(sim_results))
+        with sm2:
+            st.metric("Allowed Transactions", f"{sim_succ} (${sim_spent:.2f})")
+        with sm3:
+            st.metric("Blocked Attacks", f"{sim_block} (${sim_saved:.2f})")
+        with sm4:
+            st.metric("Final Wallet State", "LOCKED 🔒" if wallet.is_locked else "ACTIVE 🟢")
+
+        # Table Breakdown
+        sim_rows = []
+        for r in sim_results:
+            num = r.attempt_number or "-"
+            if r.success:
+                badge = "🟢 SUCCESS"
+                deducted = f"${r.amount:.2f}"
+            elif config.REASON_RATE_LIMIT_EXCEEDED in r.reason:
+                badge = "🛑 BLOCKED (RATE_LIMIT_EXCEEDED)"
+                deducted = "$0.00"
+            else:
+                badge = "🛑 BLOCKED (WALLET_LOCKED)"
+                deducted = "$0.00"
+
+            sim_rows.append(
+                {
+                    "Attempt #": f"Attempt {num} of {len(sim_results)}",
+                    "Agent ID": r.agent_id or "SafeAgent Buyer Bot v1.0",
+                    "Amount": f"${r.amount:.2f}",
+                    "Status": badge,
+                    "Funds Deducted": deducted,
+                    "Balance After": f"${r.balance:.2f}",
+                    "Security Action / Reason": r.reason,
+                }
+            )
+
+        st.dataframe(sim_rows, width="stretch", hide_index=True)
+
+
+# =============================================================================
+# 7B. VIEW: RUNAWAY AGENT SIMULATOR (DEDICATED COCKPIT)
+# =============================================================================
+
+elif "Runaway Agent Simulator" in nav_selection:
+    st.markdown("## 🚨 Runaway Agent Defense Simulator")
+    st.markdown(
+        "A dedicated security testing cockpit for **CommitCon Hackathon Problem Statement #7: Stripe – Agents That Can Pay**. "
+        "Simulates an adversarial or misbehaving AI agent attempting rapid high-frequency purchases within 60 seconds."
+    )
+
+    # Policy details card
+    st.markdown(
+        """
+        <div style="background: rgba(19, 26, 43, 0.75); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 14px; padding: 20px 24px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 1.5rem;">🛡️</span>
+                <span style="font-size: 1.1rem; font-weight: 700; color: #F8FAFC;">Runaway Agent Protection Policy (Hours 12–14)</span>
+            </div>
+            <div style="font-size: 0.88rem; color: #94A3B8; line-height: 1.6;">
+                1. <b>Rolling 60-Second Window:</b> Strictly monitors transaction attempts within a sliding 60-second window (max 3 permitted).<br>
+                2. <b>Auto-Lock Enforcement:</b> Upon the 4th rapid attempt, the wallet detects runaway behavior, marks the attempt <code>BLOCKED</code> with reason <code>RATE_LIMIT_EXCEEDED</code>, and automatically locks.<br>
+                3. <b>Cascading Defense:</b> Attempts 5–10 are immediately blocked by the locked wallet (<code>WALLET_LOCKED</code>) with <b>$0.00 deducted</b>.<br>
+                4. <b>Audit Trail:</b> Every blocked attempt is permanently cataloged in the transaction ledger with unique Transaction ID, Agent ID, Attempt Number, and exact timestamp.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    sim_btn_col1, sim_btn_col2, sim_btn_col3 = st.columns([2, 1, 1])
+    with sim_btn_col1:
+        st.button(
+            "🚨 Simulate Runaway Agent Attack",
+            on_click=handle_runaway_simulation,
+            type="primary",
+            key="view_sim_attack_btn",
+            width="stretch",
+            help="Initiates 10 rapid payment requests ($4.50 each) from SafeAgent Buyer Bot v1.0",
+        )
+    with sim_btn_col2:
+        st.button(
+            "⏱️ Reset Rate Limiter",
+            on_click=handle_reset_rate_limiter,
+            key="view_sim_reset_rate_btn",
+            width="stretch",
+            help="Clears rolling window timestamps",
+        )
+    with sim_btn_col3:
+        st.button(
+            "🔓 Admin Unlock Wallet",
+            on_click=handle_unlock_wallet,
+            key="view_sim_unlock_btn",
+            width="stretch",
+            help="Unlocks wallet and clears runaway alert",
+        )
+
+    st.write("")
+
+    # Display simulation outcome if executed
+    if st.session_state.simulation_results:
+        sim_results: List[PaymentResult] = st.session_state.simulation_results
+        sim_succ = sum(1 for r in sim_results if r.success)
+        sim_block = sum(1 for r in sim_results if not r.success)
+        sim_spent = sum(r.amount for r in sim_results if r.success)
+        sim_saved = sum(r.amount for r in sim_results if not r.success)
+
+        st.markdown("### 📊 Attack Simulation Telemetry")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Total Injected Requests", len(sim_results))
+        with m2:
+            st.metric("Legitimate Allowed", f"{sim_succ} (${sim_spent:.2f})")
+        with m3:
+            st.metric("Blocked Rogue Requests", f"{sim_block} (${sim_saved:.2f})")
+        with m4:
+            st.metric("Funds Preserved", f"${sim_saved:.2f}", delta="Protected from Rogue Agent")
+
+        st.write("")
+        st.markdown("#### 📋 Step-by-Step Security Execution Breakdown")
+        sim_table = []
+        for r in sim_results:
+            num = r.attempt_number or "-"
+            if r.success:
+                badge = "🟢 SUCCESS"
+                deducted = f"${r.amount:.2f}"
+            elif config.REASON_RATE_LIMIT_EXCEEDED in r.reason:
+                badge = "🛑 BLOCKED (RATE_LIMIT_EXCEEDED)"
+                deducted = "$0.00"
+            else:
+                badge = "🛑 BLOCKED (WALLET_LOCKED)"
+                deducted = "$0.00"
+
+            sim_table.append(
+                {
+                    "Attempt #": f"Attempt {num} of {len(sim_results)}",
+                    "Agent ID": r.agent_id or "SafeAgent Buyer Bot v1.0",
+                    "Requested Amount": f"${r.amount:.2f}",
+                    "Status": badge,
+                    "Funds Deducted": deducted,
+                    "Balance After": f"${r.balance:.2f}",
+                    "Security Outcome": r.reason,
+                }
+            )
+
+        st.dataframe(sim_table, width="stretch", hide_index=True)
+
+    # Show Ledger of Blocked Transactions
+    blocked_txs = [tx for tx in wallet.get_transaction_history() if tx.get("status") == config.STATUS_BLOCKED]
+    if blocked_txs:
+        st.write("")
+        st.markdown(f"#### 🛑 Blocked Transactions Audit Log ({len(blocked_txs)} recorded)")
+        b_rows = []
+        for tx in reversed(blocked_txs):
+            b_rows.append(
+                {
+                    "Transaction ID": tx.get("transaction_id", ""),
+                    "Agent ID": tx.get("agent_id", "SafeAgent Buyer Bot v1.0"),
+                    "Attempt #": f"Attempt {tx.get('attempt_number', '-')}",
+                    "Requested Amount": f"${float(tx.get('amount', 0)):.2f}",
+                    "Timestamp": tx.get("timestamp", "")[:19].replace("T", " "),
+                    "Status": "🛑 BLOCKED",
+                    "Block Reason": tx.get("reason", ""),
+                    "Funds Deducted": "$0.00",
+                }
+            )
+        st.dataframe(b_rows, width="stretch", hide_index=True)
+
 
 # =============================================================================
 # 8. VIEW: MARKETPLACE (SECTION C)
@@ -915,7 +1254,7 @@ elif "Transaction History" in nav_selection:
         with f_col1:
             filter_status = st.selectbox(
                 "Filter Status",
-                ["All", "APPROVED", "REJECTED", "PENDING", "FAILED"],
+                ["All", "APPROVED", "REJECTED", "BLOCKED", "PENDING", "FAILED"],
                 key="tx_filter",
             )
 
@@ -927,6 +1266,7 @@ elif "Transaction History" in nav_selection:
                 formatted_rows.append(
                     {
                         "Transaction ID": req.order_id or req.request_id,
+                        "Initiator / Agent": f"🤖 {req.buyer_agent}",
                         "Product": f"{req.product_name} ({req.seller_name})",
                         "Amount": f"${float(req.amount):.2f}",
                         "Date and time": req.timestamp[:19],
@@ -944,6 +1284,9 @@ elif "Transaction History" in nav_selection:
             if is_success:
                 status_cat = "APPROVED"
                 status_badge = "🟢 APPROVED"
+            elif raw_status == config.STATUS_BLOCKED:
+                status_cat = "BLOCKED"
+                status_badge = "🛑 BLOCKED"
             elif "declined" in reason_lower or "human reviewer" in reason_lower or "rejected by human" in reason_lower:
                 status_cat = "REJECTED"
                 status_badge = "🔴 REJECTED"
@@ -954,9 +1297,13 @@ elif "Transaction History" in nav_selection:
             if filter_status != "All" and filter_status != status_cat:
                 continue
 
+            attempt_str = f" (#{tx.get('attempt_number')})" if tx.get("attempt_number") else ""
+            agent_str = f"🤖 {tx.get('agent_id')}{attempt_str}" if tx.get("agent_id") else "🤖 Buyer Agent"
+
             formatted_rows.append(
                 {
                     "Transaction ID": tx.get("transaction_id", ""),
+                    "Initiator / Agent": agent_str,
                     "Product": tx.get("recipient", ""),
                     "Amount": f"${float(tx.get('amount', 0)):.2f}",
                     "Date and time": tx.get("timestamp", "")[:19].replace("T", " "),
@@ -1017,6 +1364,10 @@ elif "Security Settings" in nav_selection:
             <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
                 <b style="color: #60A5FA;">6. Anti-Tamper Lockout:</b><br>
                 Wallet automatically locks after <code>{config.MAX_INVALID_AUTH_ATTEMPTS} invalid authorization attempts</code>.
+            </div>
+            <div style="background: #141A24; border-left: 3px solid #EF4444; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
+                <b style="color: #F87171;">7. Runaway Agent Lockdown (Hour 12–14):</b><br>
+                Sequence of 10 rapid attempts from rogue agent auto-locks wallet on Attempt 4 (<code>{config.REASON_RATE_LIMIT_EXCEEDED}</code>) and blocks subsequent attempts 5–10 (<code>{config.REASON_WALLET_LOCKED}</code>) with $0 deducted.
             </div>
             """,
             unsafe_allow_html=True,

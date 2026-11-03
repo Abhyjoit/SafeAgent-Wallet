@@ -236,6 +236,7 @@ class BuyerAgent:
             transaction_id=tx_id,
             human_approved=human_approved,
             auth_token=auth_token,
+            agent_id="SafeAgent Buyer Bot v1.0",
         )
 
         # -----------------------------------------------------------------
@@ -304,6 +305,27 @@ class BuyerAgent:
                 requires_human_approval=True,
                 order_id=seller_response.order_id,
                 approval_request_id=appr_id,
+            )
+
+        # Blocked by runaway agent rate-limit or locked wallet
+        if wallet_res.status == config.STATUS_BLOCKED:
+            trace.append(
+                AgentTraceStep(
+                    agent="SafeAgent Wallet",
+                    action="Security Intercept: Payment Blocked",
+                    details=f"Payment blocked by security policy: {wallet_res.reason}",
+                )
+            )
+            return PurchaseFlowResult(
+                success=False,
+                status="BLOCKED",
+                product=product,
+                seller_response=seller_response,
+                wallet_result=wallet_res,
+                trace=trace,
+                summary_message=wallet_res.reason,
+                requires_human_approval=False,
+                order_id=seller_response.order_id,
             )
 
         # Other wallet rejection (insufficient balance, limit exceeded, locked, invalid auth, etc.)

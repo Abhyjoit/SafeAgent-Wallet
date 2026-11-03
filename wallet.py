@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import threading
+import time
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -27,6 +28,9 @@ from config import (
     DEFAULT_AUTH_TOKEN,
     INITIAL_BALANCE,
     LIFETIME_SPENDING_LIMIT,
+    REASON_RATE_LIMIT_EXCEEDED,
+    REASON_WALLET_LOCKED,
+    STATUS_BLOCKED,
     STATUS_REJECTED,
     STATUS_SUCCESS,
     TRANSACTIONS_FILE,
@@ -51,6 +55,8 @@ class PaymentResult:
     requires_human_approval: bool
     human_approved: Optional[bool]
     timestamp: str
+    agent_id: Optional[str] = None
+    attempt_number: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to a dictionary."""
@@ -67,6 +73,8 @@ class PaymentResult:
             "requires_human_approval": self.requires_human_approval,
             "human_approved": self.human_approved,
             "timestamp": self.timestamp,
+            "agent_id": self.agent_id,
+            "attempt_number": self.attempt_number,
         }
 
     def __getitem__(self, item: str) -> Any:
@@ -109,6 +117,8 @@ class SafeAgentWallet:
         # State tracking
         self._total_spent = Decimal("0.00")
         self._balance = self._initial_balance
+        self._blocked_attempts_count: int = 0
+        self._runaway_alert: Optional[Dict[str, Any]] = None
 
         if load_existing:
             self._recalculate_from_history()
@@ -144,6 +154,16 @@ class SafeAgentWallet:
         return self._auth_guard.is_locked
 
     @property
+    def lock_reason(self) -> Optional[str]:
+        """Reason why the wallet was locked."""
+        return self._auth_guard.lock_reason
+
+    @property
+    def lock_timestamp(self) -> Optional[str]:
+        """Timestamp when the wallet was locked."""
+        return self._auth_guard.lock_timestamp
+
+    @property
     def invalid_auth_attempts(self) -> int:
         """Number of failed human-authorization attempts."""
         return self._auth_guard.invalid_attempts
@@ -168,6 +188,18 @@ class SafeAgentWallet:
             return False
         return validated_amount > self._auto_threshold
 
+    @property
+    def runaway_alert(self) -> Optional[Dict[str, Any]]:
+        """Runaway agent alert details if triggered."""
+        with self._lock:
+            return self._runaway_alert
+
+    @property
+    def blocked_attempts_count(self) -> int:
+        """Total count of blocked runaway attempts."""
+        with self._lock:
+            return self._blocked_attempts_count
+
     def _generate_tx_id(self) -> str:
         """Generates a unique transaction identifier."""
         return f"tx_{uuid.uuid4().hex[:12]}"
@@ -182,6 +214,8 @@ class SafeAgentWallet:
         requires_approval: bool,
         human_approved: Optional[bool],
         timestamp: str,
+        agent_id: Optional[str] = None,
+        attempt_number: Optional[int] = None,
     ) -> PaymentResult:
         """Helper to create Transaction record and return PaymentResult."""
         tx = Transaction(
@@ -195,6 +229,8 @@ class SafeAgentWallet:
             lifetime_spent_after=f"{self._total_spent:.2f}",
             requires_human_approval=requires_approval,
             human_approved=human_approved,
+            agent_id=agent_id,
+            attempt_number=attempt_number,
         )
         self._transaction_manager.record_transaction(tx)
 
@@ -211,6 +247,8 @@ class SafeAgentWallet:
             requires_human_approval=requires_approval,
             human_approved=human_approved,
             timestamp=timestamp,
+            agent_id=agent_id,
+            attempt_number=attempt_number,
         )
 
     def execute_payment(
@@ -220,6 +258,10 @@ class SafeAgentWallet:
         transaction_id: Optional[str] = None,
         human_approved: Optional[bool] = None,
         auth_token: Optional[str] = DEFAULT_AUTH_TOKEN,
+        agent_id: Optional[str] = None,
+        attempt_number: Optional[int] = None,
+        current_time: Optional[float] = None,
+        is_agent_attempt: bool = True,
     ) -> PaymentResult:
         """
         Executes a payment request with full security validation.
@@ -234,6 +276,10 @@ class SafeAgentWallet:
                 - True: Human reviewer approved the request.
             auth_token: Credential token used to verify human authorization.
                         Defaults to DEFAULT_AUTH_TOKEN when human_approved is True.
+            agent_id: Identifier of the purchasing agent initiating the payment.
+            attempt_number: Number of the attempt in a sequence (e.g. 4 of 10).
+            current_time: Optional explicit timestamp for rate limiter (used for mock clocks).
+            is_agent_attempt: Whether this execution is an agent-initiated purchase attempt.
 
         Returns:
             PaymentResult containing transaction status and wallet state.
@@ -241,48 +287,96 @@ class SafeAgentWallet:
         now_iso = datetime.now(timezone.utc).isoformat()
 
         with self._lock:
-            # -------------------------------------------------------------
-            # STEP 1: Rate Limiting Check (Requirement 7)
-            # Maximum 3 payment requests per rolling 60 seconds.
-            # Count rejected requests too!
-            # -------------------------------------------------------------
-            rate_ok, rate_msg = self._rate_limiter.check_and_record()
             tx_id = transaction_id or self._generate_tx_id()
-
-            if not rate_ok:
-                return self._record_result(
-                    tx_id=tx_id,
-                    amount=Decimal("0.00"),
-                    recipient=recipient,
-                    status=STATUS_REJECTED,
-                    reason=rate_msg or "Rate limit exceeded.",
-                    requires_approval=False,
-                    human_approved=human_approved,
-                    timestamp=now_iso,
-                )
+            is_valid_amount, validated_amount, amount_err = validate_amount(amount)
+            req_amount = validated_amount if (is_valid_amount and validated_amount is not None) else Decimal("0.00")
 
             # -------------------------------------------------------------
-            # STEP 2: Lock Status Check (Requirement 8)
-            # Lock the wallet after 3 invalid human-authorization attempts.
+            # STEP 0: Lock Status Check (Requirement 8 & Hour 12-14)
+            # If wallet is locked, block or reject immediately.
             # -------------------------------------------------------------
             if self._auth_guard.is_locked:
+                lock_desc = self._auth_guard.lock_reason or "Wallet is locked."
+                if REASON_RATE_LIMIT_EXCEEDED in str(lock_desc):
+                    reason_msg = (
+                        f"{REASON_WALLET_LOCKED}: Rate limit exceeded ({REASON_RATE_LIMIT_EXCEEDED}). "
+                        "Wallet is locked. All payments are halted."
+                    )
+                else:
+                    reason_msg = f"{REASON_WALLET_LOCKED}: {lock_desc} All payments are halted."
+
+                if is_agent_attempt:
+                    self._rate_limiter.record_attempt(current_time)
+                    self._blocked_attempts_count += 1
+                    return self._record_result(
+                        tx_id=tx_id,
+                        amount=req_amount,
+                        recipient=recipient,
+                        status=STATUS_BLOCKED,
+                        reason=reason_msg,
+                        requires_approval=False,
+                        human_approved=human_approved,
+                        timestamp=now_iso,
+                        agent_id=agent_id,
+                        attempt_number=attempt_number,
+                    )
+                else:
+                    return self._record_result(
+                        tx_id=tx_id,
+                        amount=req_amount,
+                        recipient=recipient,
+                        status=STATUS_REJECTED,
+                        reason=reason_msg,
+                        requires_approval=False,
+                        human_approved=human_approved,
+                        timestamp=now_iso,
+                        agent_id=agent_id,
+                        attempt_number=attempt_number,
+                    )
+
+            # -------------------------------------------------------------
+            # STEP 1: Rate Limiting & Runaway Agent Check (Requirement 7 & Hour 12-14)
+            # Maximum 3 payment requests per rolling 60 seconds.
+            # On 4th attempt: lock the wallet, status BLOCKED, RATE_LIMIT_EXCEEDED.
+            # -------------------------------------------------------------
+            rate_ok, rate_msg = self._rate_limiter.check_and_record(current_time)
+
+            if not rate_ok:
+                # Runaway agent rate limit breach!
+                self.lock(reason=REASON_RATE_LIMIT_EXCEEDED)
+                self._blocked_attempts_count += 1
+                attempts_count = self._rate_limiter.get_request_count(current_time)
+                self._runaway_alert = {
+                    "agent_id": agent_id or "SafeAgent Buyer Bot v1.0",
+                    "attempts_count": attempts_count,
+                    "window_seconds": int(self._rate_limiter.window_seconds),
+                    "lock_timestamp": self._auth_guard.lock_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "status": "LOCKED",
+                    "message": (
+                        "🚨 RUNAWAY AGENT DETECTED: Your AI agent exceeded the permitted purchase rate "
+                        f"({self._rate_limiter.max_requests} transactions per {int(self._rate_limiter.window_seconds)} seconds). "
+                        "Wallet has been automatically locked to protect your funds."
+                    ),
+                }
+
+                status = STATUS_BLOCKED if is_agent_attempt else STATUS_REJECTED
                 return self._record_result(
                     tx_id=tx_id,
-                    amount=Decimal("0.00"),
+                    amount=req_amount,
                     recipient=recipient,
-                    status=STATUS_REJECTED,
-                    reason="Wallet is locked due to 3 invalid authorization attempts. All payments are halted.",
+                    status=status,
+                    reason=f"{REASON_RATE_LIMIT_EXCEEDED}: {rate_msg or 'Rate limit exceeded.'}",
                     requires_approval=False,
                     human_approved=human_approved,
                     timestamp=now_iso,
+                    agent_id=agent_id,
+                    attempt_number=attempt_number,
                 )
 
             # -------------------------------------------------------------
-            # STEP 3: Prevent Duplicate Transaction Execution (Requirement 10)
-            # Prevent duplicate transaction execution using unique transaction IDs.
+            # STEP 2: Prevent Duplicate Transaction Execution (Requirement 10)
             # -------------------------------------------------------------
             if transaction_id is not None and self._transaction_manager.has_transaction_id(transaction_id):
-                # Reject duplicate execution attempt immediately
                 return PaymentResult(
                     success=False,
                     transaction_id=transaction_id,
@@ -296,13 +390,14 @@ class SafeAgentWallet:
                     requires_human_approval=False,
                     human_approved=human_approved,
                     timestamp=now_iso,
+                    agent_id=agent_id,
+                    attempt_number=attempt_number,
                 )
 
             # -------------------------------------------------------------
-            # STEP 4: Amount Validation (Technical Requirement)
+            # STEP 3: Amount Validation (Technical Requirement)
             # Validate amounts and reject zero or negative values.
             # -------------------------------------------------------------
-            is_valid_amount, validated_amount, amount_err = validate_amount(amount)
             if not is_valid_amount or validated_amount is None:
                 return self._record_result(
                     tx_id=tx_id,
@@ -313,10 +408,12 @@ class SafeAgentWallet:
                     requires_approval=False,
                     human_approved=human_approved,
                     timestamp=now_iso,
+                    agent_id=agent_id,
+                    attempt_number=attempt_number,
                 )
 
             # -------------------------------------------------------------
-            # STEP 5: Human Approval Verification (Requirements 3, 4, 8, 9)
+            # STEP 4: Human Approval Verification (Requirements 3, 4, 8, 9)
             # Automatic payment threshold: $10 (inclusive).
             # Payments above $10 must require human approval.
             # -------------------------------------------------------------
@@ -337,6 +434,8 @@ class SafeAgentWallet:
                         requires_approval=True,
                         human_approved=None,
                         timestamp=now_iso,
+                        agent_id=agent_id,
+                        attempt_number=attempt_number,
                     )
 
                 if human_approved is False:
@@ -351,6 +450,8 @@ class SafeAgentWallet:
                         requires_approval=True,
                         human_approved=False,
                         timestamp=now_iso,
+                        agent_id=agent_id,
+                        attempt_number=attempt_number,
                     )
 
                 if human_approved is True:
@@ -367,10 +468,12 @@ class SafeAgentWallet:
                             requires_approval=True,
                             human_approved=True,
                             timestamp=now_iso,
+                            agent_id=agent_id,
+                            attempt_number=attempt_number,
                         )
 
             # -------------------------------------------------------------
-            # STEP 6: Check Available Wallet Balance (Requirements 5, 12, 13)
+            # STEP 5: Check Available Wallet Balance (Requirements 5, 12, 13)
             # Reject payments when balance is insufficient.
             # Never allow a negative balance.
             # Human approval must not bypass any security checks.
@@ -388,10 +491,12 @@ class SafeAgentWallet:
                     requires_approval=requires_approval,
                     human_approved=human_approved,
                     timestamp=now_iso,
+                    agent_id=agent_id,
+                    attempt_number=attempt_number,
                 )
 
             # -------------------------------------------------------------
-            # STEP 7: Check Lifetime Spending Limit (Requirements 2, 6, 13)
+            # STEP 6: Check Lifetime Spending Limit (Requirements 2, 6, 13)
             # Maximum lifetime spending limit: $80.
             # Reject payments that exceed the remaining $80 spending allowance.
             # Human approval must not bypass any security checks.
@@ -411,10 +516,12 @@ class SafeAgentWallet:
                     requires_approval=requires_approval,
                     human_approved=human_approved,
                     timestamp=now_iso,
+                    agent_id=agent_id,
+                    attempt_number=attempt_number,
                 )
 
             # -------------------------------------------------------------
-            # STEP 8: Execute Payment (Requirements 1, 11, 12)
+            # STEP 7: Execute Payment (Requirements 1, 11, 12)
             # Deduct balance, update lifetime spent, record success.
             # -------------------------------------------------------------
             self._balance -= validated_amount
@@ -429,6 +536,8 @@ class SafeAgentWallet:
                 requires_approval=requires_approval,
                 human_approved=human_approved,
                 timestamp=now_iso,
+                agent_id=agent_id,
+                attempt_number=attempt_number,
             )
 
     def pay(
@@ -438,6 +547,10 @@ class SafeAgentWallet:
         transaction_id: Optional[str] = None,
         human_approved: Optional[bool] = None,
         auth_token: Optional[str] = DEFAULT_AUTH_TOKEN,
+        agent_id: Optional[str] = None,
+        attempt_number: Optional[int] = None,
+        current_time: Optional[float] = None,
+        is_agent_attempt: bool = True,
     ) -> PaymentResult:
         """Convenience alias for execute_payment."""
         return self.execute_payment(
@@ -446,7 +559,43 @@ class SafeAgentWallet:
             transaction_id=transaction_id,
             human_approved=human_approved,
             auth_token=auth_token,
+            agent_id=agent_id,
+            attempt_number=attempt_number,
+            current_time=current_time,
+            is_agent_attempt=is_agent_attempt,
         )
+
+    def simulate_runaway_agent_attack(
+        self,
+        attempts: int = 10,
+        amount: Any = Decimal("4.50"),
+        recipient: str = "USB-C Cable (CableCraft Direct)",
+        agent_id: str = "SafeAgent Buyer Bot v1.0",
+        current_time: Optional[float] = None,
+    ) -> List[PaymentResult]:
+        """
+        Executes a controlled runaway agent simulation of N rapid purchase attempts.
+        Attempt 1-3: Allowed through existing payment rules.
+        Attempt 4: Immediately triggers rate-limit breach, auto-locking the wallet (STATUS_BLOCKED, RATE_LIMIT_EXCEEDED).
+        Attempts 5-10: Blocked by the locked wallet (STATUS_BLOCKED, WALLET_LOCKED).
+        No unauthorized funds are deducted.
+        """
+        results: List[PaymentResult] = []
+        base_time = current_time if current_time is not None else time.time()
+
+        for attempt_idx in range(1, attempts + 1):
+            sim_time = base_time + (attempt_idx * 0.1)
+            res = self.execute_payment(
+                amount=amount,
+                recipient=recipient,
+                agent_id=agent_id,
+                attempt_number=attempt_idx,
+                current_time=sim_time,
+                is_agent_attempt=True,
+            )
+            results.append(res)
+
+        return results
 
     def get_transaction_history(self) -> List[Dict[str, Any]]:
         """Returns all recorded transactions as dictionaries."""
@@ -457,11 +606,12 @@ class SafeAgentWallet:
         """Administrative unlock for the wallet."""
         with self._lock:
             self._auth_guard.unlock()
+            self._runaway_alert = None
 
-    def lock(self) -> None:
+    def lock(self, reason: Optional[str] = None) -> None:
         """Administrative lock for the wallet."""
         with self._lock:
-            self._auth_guard.lock()
+            self._auth_guard.lock(reason=reason)
 
     def reset_rate_limiter(self) -> None:
         """Resets the rate limiter window."""
@@ -476,6 +626,8 @@ class SafeAgentWallet:
         with self._lock:
             self._balance = self._initial_balance
             self._total_spent = Decimal("0.00")
+            self._blocked_attempts_count = 0
+            self._runaway_alert = None
             self._auth_guard.unlock()
             self._rate_limiter.reset()
             self._transaction_manager.clear()

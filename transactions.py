@@ -13,7 +13,12 @@ from pathlib import Path
 import threading
 from typing import Any, Dict, List, Optional
 
-from config import STATUS_REJECTED, STATUS_SUCCESS, TRANSACTIONS_FILE
+from config import (
+    STATUS_BLOCKED,
+    STATUS_REJECTED,
+    STATUS_SUCCESS,
+    TRANSACTIONS_FILE,
+)
 
 
 @dataclass
@@ -24,12 +29,14 @@ class Transaction:
     timestamp: str
     amount: str
     recipient: str
-    status: str  # SUCCESS or REJECTED
+    status: str  # SUCCESS, REJECTED, or BLOCKED
     reason: str
     balance_after: str
     lifetime_spent_after: str
     requires_human_approval: bool
     human_approved: Optional[bool] = None
+    agent_id: Optional[str] = None
+    attempt_number: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert transaction to a JSON-serializable dictionary."""
@@ -49,6 +56,8 @@ class Transaction:
             lifetime_spent_after=str(data.get("lifetime_spent_after", "0.00")),
             requires_human_approval=bool(data.get("requires_human_approval", False)),
             human_approved=data.get("human_approved"),
+            agent_id=data.get("agent_id"),
+            attempt_number=data.get("attempt_number"),
         )
 
 
@@ -156,6 +165,11 @@ class TransactionManager:
         """Returns all rejected transactions."""
         with self._lock:
             return [tx for tx in self._transactions if tx.status == STATUS_REJECTED]
+
+    def get_blocked_transactions(self) -> List[Transaction]:
+        """Returns all blocked runaway agent transactions."""
+        with self._lock:
+            return [tx for tx in self._transactions if tx.status == STATUS_BLOCKED]
 
     def clear(self) -> None:
         """Clears all transactions in memory and resets the JSON file."""

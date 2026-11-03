@@ -540,5 +540,280 @@ class TestHumanApprovalCenter(unittest.TestCase):
         self.assertEqual(self.wallet.balance, Decimal("100.00"))
 
 
+class TestRunawayAgentSecurity(unittest.TestCase):
+    """
+    Hour 12–14 Runaway Agent Security Test Suite.
+    Validates:
+    1. First purchase attempt allowed.
+    2. Second purchase attempt allowed.
+    3. Third purchase attempt allowed.
+    4. Fourth attempt locks the wallet.
+    5. Fifth attempt is blocked.
+    6. Ten rapid attempts produce expected security outcome (3 allowed, 7 blocked).
+    7. Blocked attempts never deduct wallet funds.
+    8. Blocked transactions are recorded in history (status == BLOCKED).
+    9. Attempts older than 60s expire from the rolling window (mock timestamps without time.sleep).
+    10. Locked wallet cannot execute payments even with human approval.
+    11. Existing approval and rejection still works.
+    12. Existing wallet functionality remains intact.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.test_tx_file = Path(self.test_dir) / "test_runaway_tx.json"
+        self.wallet = SafeAgentWallet(
+            transactions_file=self.test_tx_file,
+            load_existing=False,
+        )
+        self.marketplace = Marketplace()
+        self.sellers = create_default_sellers()
+        self.approval_center = ApprovalCenter()
+        self.buyer = BuyerAgent(
+            marketplace=self.marketplace,
+            wallet=self.wallet,
+            sellers=self.sellers,
+            approval_center=self.approval_center,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_01_first_purchase_attempt_allowed(self):
+        """Scenario 1: First purchase attempt allowed."""
+        res = self.wallet.execute_payment(
+            amount=Decimal("4.50"),
+            recipient="USB-C Cable",
+            agent_id="SafeAgent Buyer Bot v1.0",
+            attempt_number=1,
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.status, config.STATUS_SUCCESS)
+        self.assertEqual(self.wallet.balance, Decimal("95.50"))
+        self.assertEqual(self.wallet.total_spent, Decimal("4.50"))
+        self.assertFalse(self.wallet.is_locked)
+
+    def test_02_second_purchase_attempt_allowed(self):
+        """Scenario 2: Second purchase attempt allowed."""
+        self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=1)
+        res2 = self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=2)
+        self.assertTrue(res2.success)
+        self.assertEqual(res2.status, config.STATUS_SUCCESS)
+        self.assertEqual(self.wallet.balance, Decimal("91.00"))
+        self.assertEqual(self.wallet.total_spent, Decimal("9.00"))
+        self.assertFalse(self.wallet.is_locked)
+
+    def test_03_third_purchase_attempt_allowed(self):
+        """Scenario 3: Third purchase attempt allowed."""
+        self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=1)
+        self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=2)
+        res3 = self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=3)
+        self.assertTrue(res3.success)
+        self.assertEqual(res3.status, config.STATUS_SUCCESS)
+        self.assertEqual(self.wallet.balance, Decimal("86.50"))
+        self.assertEqual(self.wallet.total_spent, Decimal("13.50"))
+        self.assertFalse(self.wallet.is_locked)
+
+    def test_04_fourth_attempt_locks_wallet(self):
+        """Scenario 4: Fourth attempt locks the wallet."""
+        for i in range(1, 4):
+            self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=i)
+
+        self.assertFalse(self.wallet.is_locked)
+        res4 = self.wallet.execute_payment(
+            amount=Decimal("4.50"),
+            recipient="USB-C Cable",
+            agent_id="SafeAgent Buyer Bot v1.0",
+            attempt_number=4,
+        )
+        self.assertFalse(res4.success)
+        self.assertEqual(res4.status, config.STATUS_BLOCKED)
+        self.assertIn(config.REASON_RATE_LIMIT_EXCEEDED, res4.reason)
+        self.assertTrue(self.wallet.is_locked)
+        self.assertIsNotNone(self.wallet.runaway_alert)
+        self.assertEqual(self.wallet.runaway_alert["status"], "LOCKED")
+        self.assertEqual(self.wallet.balance, Decimal("86.50"))
+
+    def test_05_fifth_attempt_blocked(self):
+        """Scenario 5: Fifth attempt is blocked."""
+        for i in range(1, 5):
+            self.wallet.execute_payment(amount=Decimal("4.50"), recipient="USB-C Cable", attempt_number=i)
+
+        self.assertTrue(self.wallet.is_locked)
+        res5 = self.wallet.execute_payment(
+            amount=Decimal("4.50"),
+            recipient="USB-C Cable",
+            agent_id="SafeAgent Buyer Bot v1.0",
+            attempt_number=5,
+        )
+        self.assertFalse(res5.success)
+        self.assertEqual(res5.status, config.STATUS_BLOCKED)
+        self.assertIn(config.REASON_WALLET_LOCKED, res5.reason)
+        self.assertEqual(self.wallet.balance, Decimal("86.50"))
+
+    def test_06_ten_rapid_attempts_outcome(self):
+        """Scenario 6: Ten rapid attempts produce expected outcome (3 allowed, 7 blocked)."""
+        results = self.wallet.simulate_runaway_agent_attack(attempts=10, amount=Decimal("4.50"))
+        self.assertEqual(len(results), 10)
+
+        successful = [r for r in results if r.success]
+        blocked = [r for r in results if not r.success]
+        self.assertEqual(len(successful), 3)
+        self.assertEqual(len(blocked), 7)
+
+        # Attempts 1–3: SUCCESS
+        for i in range(3):
+            self.assertEqual(results[i].status, config.STATUS_SUCCESS)
+            self.assertTrue(results[i].success)
+
+        # Attempt 4: RATE_LIMIT_EXCEEDED
+        self.assertEqual(results[3].status, config.STATUS_BLOCKED)
+        self.assertIn(config.REASON_RATE_LIMIT_EXCEEDED, results[3].reason)
+
+        # Attempts 5–10: WALLET_LOCKED
+        for i in range(4, 10):
+            self.assertEqual(results[i].status, config.STATUS_BLOCKED)
+            self.assertIn(config.REASON_WALLET_LOCKED, results[i].reason)
+
+        self.assertTrue(self.wallet.is_locked)
+
+    def test_07_blocked_attempts_never_deduct_funds(self):
+        """Scenario 7: Blocked attempts never deduct wallet funds."""
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+        results = self.wallet.simulate_runaway_agent_attack(attempts=10, amount=Decimal("4.50"))
+
+        # Only 3 attempts of $4.50 should have deducted ($13.50 total)
+        self.assertEqual(self.wallet.balance, Decimal("86.50"))
+        self.assertEqual(self.wallet.total_spent, Decimal("13.50"))
+        self.assertEqual(self.wallet.remaining_spending_limit, Decimal("66.50"))
+
+        # Explicitly verify balance_after in all blocked results is unchanged
+        for b in results[3:]:
+            self.assertEqual(b.balance, Decimal("86.50"))
+            self.assertEqual(b.total_spent, Decimal("13.50"))
+
+    def test_08_blocked_transactions_recorded_in_history(self):
+        """Scenario 8: Blocked transactions are recorded in history (status == BLOCKED)."""
+        self.wallet.simulate_runaway_agent_attack(attempts=10, amount=Decimal("4.50"))
+        history = self.wallet.get_transaction_history()
+        self.assertEqual(len(history), 10)
+
+        blocked_txs = [tx for tx in history if tx["status"] == config.STATUS_BLOCKED]
+        self.assertEqual(len(blocked_txs), 7)
+
+        # Verify transaction fields for blocked attempts
+        for tx in blocked_txs:
+            self.assertTrue(tx["transaction_id"].startswith("tx_"))
+            self.assertEqual(tx["agent_id"], "SafeAgent Buyer Bot v1.0")
+            self.assertIsNotNone(tx["attempt_number"])
+            self.assertEqual(tx["amount"], "4.50")
+            self.assertEqual(tx["balance_after"], "86.50")
+            self.assertTrue(
+                config.REASON_RATE_LIMIT_EXCEEDED in tx["reason"]
+                or config.REASON_WALLET_LOCKED in tx["reason"]
+            )
+
+    def test_09_rolling_window_expiry_mock_clock(self):
+        """Scenario 9: Attempts older than 60s expire from the rolling window (mockable clock)."""
+        t0 = 1000.0
+        # 3 requests at t0: Allowed
+        res1 = self.wallet.execute_payment(Decimal("1.00"), "Vendor 1", current_time=t0)
+        res2 = self.wallet.execute_payment(Decimal("1.00"), "Vendor 2", current_time=t0 + 10.0)
+        res3 = self.wallet.execute_payment(Decimal("1.00"), "Vendor 3", current_time=t0 + 20.0)
+        self.assertTrue(res1.success and res2.success and res3.success)
+
+        # 4th request at t0 + 30.0 (< 60s from t0): Blocked due to rate limit
+        res4 = self.wallet.execute_payment(Decimal("1.00"), "Vendor 4", current_time=t0 + 30.0)
+        self.assertFalse(res4.success)
+        self.assertTrue(self.wallet.is_locked)
+
+        # Administratively unlock wallet to test rate limiter window expiration
+        self.wallet.unlock()
+        self.assertFalse(self.wallet.is_locked)
+
+        # At t0 + 95.0 (> 60s from t0 + 30.0), all previous attempts have expired from rolling window!
+        res5 = self.wallet.execute_payment(Decimal("1.00"), "Vendor 5", current_time=t0 + 95.0)
+        self.assertTrue(res5.success)
+        self.assertEqual(res5.status, config.STATUS_SUCCESS)
+
+    def test_10_locked_wallet_rejects_human_approval(self):
+        """Scenario 10: Locked wallet cannot execute payments even with human approval."""
+        # Create a pending approval request for $15 item
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        # Trigger runaway attack locking the wallet
+        self.wallet.simulate_runaway_agent_attack(attempts=4, amount=Decimal("4.50"))
+        self.assertTrue(self.wallet.is_locked)
+        balance_when_locked = self.wallet.balance
+
+        # Attempt to approve pending request while wallet is locked
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("locked", err_msg.lower())
+        # Funds must not be deducted
+        self.assertEqual(self.wallet.balance, balance_when_locked)
+
+    def test_11_existing_approval_and_rejection_still_works(self):
+        """Scenario 11: Existing approval and rejection still works when wallet is not locked."""
+        # Test approval path
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+        ok_appr, _, res_appr = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertTrue(ok_appr)
+        self.assertEqual(res_appr.status, config.STATUS_SUCCESS)
+        self.assertEqual(self.wallet.balance, Decimal("85.00"))
+
+        # Test rejection path
+        self.wallet.reset_rate_limiter()
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req2 = self.approval_center.get_pending_requests()[0]
+        ok_rej, _ = self.approval_center.reject_request(
+            request_id=req2.request_id,
+            wallet=self.wallet,
+        )
+        self.assertTrue(ok_rej)
+        self.assertEqual(req2.status, "REJECTED")
+        self.assertEqual(self.wallet.balance, Decimal("85.00"))
+
+    def test_12_existing_wallet_functionality_remains_intact(self):
+        """Scenario 12: Existing wallet safeguards (balance, limits, thresholds, duplicate IDs) remain intact."""
+        # 1. Starting balance $100
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+
+        # 2. Automatic threshold ($10 inclusive)
+        res_auto = self.wallet.execute_payment(Decimal("10.00"), "Under Threshold")
+        self.assertTrue(res_auto.success)
+
+        # 3. Requires human approval for > $10
+        res_over = self.wallet.execute_payment(Decimal("15.00"), "Over Threshold")
+        self.assertFalse(res_over.success)
+        self.assertTrue(res_over.requires_human_approval)
+
+        # 4. Duplicate transaction ID rejection
+        tx_id = "test_unique_tx_123"
+        self.wallet.reset_rate_limiter()
+        res_tx1 = self.wallet.execute_payment(Decimal("2.00"), "Vendor", transaction_id=tx_id)
+        self.assertTrue(res_tx1.success)
+        res_tx2 = self.wallet.execute_payment(Decimal("2.00"), "Vendor", transaction_id=tx_id)
+        self.assertFalse(res_tx2.success)
+        self.assertIn("Duplicate", res_tx2.reason)
+
+        # 5. Invalid authorization locking after 3 attempts
+        w_auth = SafeAgentWallet(load_existing=False)
+        w_auth.execute_payment(Decimal("15.00"), "V", human_approved=True, auth_token="BAD1")
+        w_auth.execute_payment(Decimal("15.00"), "V", human_approved=True, auth_token="BAD2")
+        w_auth.execute_payment(Decimal("15.00"), "V", human_approved=True, auth_token="BAD3")
+        self.assertTrue(w_auth.is_locked)
+        self.assertEqual(w_auth.invalid_auth_attempts, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
