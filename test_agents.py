@@ -25,7 +25,7 @@ import unittest
 from buyer_agent import BuyerAgent
 import config
 from marketplace import Marketplace, Product
-from purchase import PurchaseFlowResult
+from purchase import ApprovalCenter, ApprovalRequest, PurchaseFlowResult
 from seller_agent import SellerAgent, create_default_sellers
 from wallet import SafeAgentWallet
 
@@ -258,6 +258,286 @@ class TestMultiAgentMarketplace(unittest.TestCase):
         # Balance must remain untouched
         self.assertEqual(self.wallet.balance, Decimal("22.00"))
         self.assertEqual(self.wallet.total_spent, Decimal("78.00"))
+
+
+class TestHumanApprovalCenter(unittest.TestCase):
+    """
+    Verifies all 10 core Human Approval Center security criteria:
+    1. A $15 headphone purchase appears in Pending Approvals.
+    2. Approving it deducts exactly $15 once.
+    3. Rejecting it deducts $0.
+    4. Clicking Approve twice does not create duplicate payments.
+    5. An unavailable product cannot be approved.
+    6. Insufficient balance prevents payment.
+    7. Spending limit prevents payment.
+    8. Locked wallet prevents payment.
+    9. Rate limit is enforced.
+    10. Pending requests and transaction history remain consistent.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.test_tx_file = Path(self.test_dir) / "test_approval_tx.json"
+
+        self.wallet = SafeAgentWallet(
+            transactions_file=self.test_tx_file,
+            load_existing=False,
+        )
+        self.marketplace = Marketplace()
+        self.sellers = create_default_sellers()
+        self.approval_center = ApprovalCenter()
+        self.buyer = BuyerAgent(
+            marketplace=self.marketplace,
+            wallet=self.wallet,
+            sellers=self.sellers,
+            approval_center=self.approval_center,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_01_fifteen_dollar_purchase_appears_in_pending_approvals(self):
+        self.assertEqual(self.approval_center.get_pending_count(), 0)
+
+        res = self.buyer.execute_purchase("Buy Bluetooth Headphones")
+
+        self.assertFalse(res.success)
+        self.assertEqual(res.status, "AWAITING_APPROVAL")
+        self.assertTrue(res.requires_human_approval)
+
+        self.assertEqual(self.approval_center.get_pending_count(), 1)
+        pending = self.approval_center.get_pending_requests()
+        self.assertEqual(len(pending), 1)
+
+        req: ApprovalRequest = pending[0]
+        self.assertEqual(req.product_name, "Bluetooth Headphones")
+        self.assertEqual(req.amount, Decimal("15.00"))
+        self.assertEqual(req.seller_name, "SoundWave Audio")
+        self.assertEqual(req.status, "PENDING")
+        self.assertIn("exceeds the $10.00 automatic", req.reason)
+
+    def test_02_approving_deducts_exactly_fifteen_once(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        ok, msg, wallet_res = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+
+        self.assertTrue(ok)
+        self.assertIsNotNone(wallet_res)
+        self.assertTrue(wallet_res.success)
+        self.assertEqual(self.wallet.balance, Decimal("85.00"))
+        self.assertEqual(self.wallet.total_spent, Decimal("15.00"))
+        self.assertEqual(req.status, "APPROVED")
+        self.assertEqual(self.approval_center.get_pending_count(), 0)
+
+    def test_03_rejecting_deducts_zero_dollars(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        initial_balance = self.wallet.balance
+        ok, msg = self.approval_center.reject_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            reason="User decided not to purchase.",
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(self.wallet.balance, initial_balance)
+        self.assertEqual(self.wallet.total_spent, Decimal("0.00"))
+        self.assertEqual(req.status, "REJECTED")
+        self.assertEqual(self.approval_center.get_pending_count(), 0)
+        self.assertEqual(self.wallet.invalid_auth_attempts, 0)
+        self.assertFalse(self.wallet.is_locked)
+
+    def test_04_double_approve_prevents_duplicate_payments(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        ok1, _, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertTrue(ok1)
+        self.assertEqual(self.wallet.balance, Decimal("85.00"))
+
+        ok2, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok2)
+        self.assertIn("already been processed", err_msg)
+        self.assertEqual(self.wallet.balance, Decimal("85.00"))
+        self.assertEqual(self.wallet.total_spent, Decimal("15.00"))
+
+    def test_05_unavailable_product_cannot_be_approved(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        self.marketplace.set_availability("prod_headphones", False)
+
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("out of stock", err_msg.lower())
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+        self.assertEqual(req.status, "FAILED")
+
+    def test_06_insufficient_balance_prevents_payment(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        self.wallet._balance = Decimal("5.00")
+
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("Insufficient wallet balance", err_msg)
+        self.assertEqual(self.wallet.balance, Decimal("5.00"))
+        self.assertEqual(req.status, "FAILED")
+
+    def test_07_spending_limit_prevents_payment(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        self.wallet._total_spent = Decimal("75.00")
+        self.wallet._balance = Decimal("25.00")
+
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("spending limit exceeded", err_msg.lower())
+        self.assertEqual(self.wallet.balance, Decimal("25.00"))
+        self.assertEqual(self.wallet.total_spent, Decimal("75.00"))
+        self.assertEqual(req.status, "FAILED")
+
+    def test_08_locked_wallet_prevents_payment(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        self.wallet.lock()
+        self.assertTrue(self.wallet.is_locked)
+
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("locked", err_msg.lower())
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+        self.assertEqual(req.status, "FAILED")
+
+    def test_09_rate_limit_is_enforced(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        for i in range(3):
+            self.wallet.execute_payment(amount=Decimal("1.00"), recipient=f"Vendor {i}")
+
+        ok, err_msg, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok)
+        self.assertIn("Rate limit exceeded", err_msg)
+        self.assertEqual(req.status, "FAILED")
+
+    def test_10_consistency_between_pending_and_history(self):
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        self.wallet.reset_rate_limiter()
+        self.approval_center.approve_request(req.request_id, self.wallet, self.marketplace)
+
+        history = self.wallet.get_transaction_history()
+        self.assertTrue(len(history) >= 1)
+        latest_tx = history[-1]
+        self.assertEqual(latest_tx["status"], config.STATUS_SUCCESS)
+        self.assertEqual(Decimal(latest_tx["amount"]), Decimal("15.00"))
+        self.assertTrue(latest_tx["requires_human_approval"])
+        self.assertTrue(latest_tx["human_approved"])
+
+        self.assertEqual(self.approval_center.get_pending_count(), 0)
+
+    def test_11_attempt_to_approve_already_rejected_request(self):
+        """Verifies an already rejected request cannot subsequently be approved."""
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        # 1. Reject request
+        ok_rej, msg_rej = self.approval_center.reject_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            reason="Declined by user.",
+        )
+        self.assertTrue(ok_rej)
+        self.assertEqual(req.status, "REJECTED")
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+
+        # 2. Attempt to approve rejected request -> must be rejected
+        ok_appr, msg_appr, wallet_res = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+        )
+        self.assertFalse(ok_appr)
+        self.assertIsNone(wallet_res)
+        self.assertIn("already been processed", msg_appr.lower())
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+        self.assertEqual(self.wallet.total_spent, Decimal("0.00"))
+
+    def test_12_attempt_execution_without_human_authorization(self):
+        """Verifies execution without valid human authorization is strictly rejected."""
+        self.buyer.execute_purchase("Buy Bluetooth Headphones")
+        req = self.approval_center.get_pending_requests()[0]
+
+        # 1. Missing token
+        ok_empty, msg_empty, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+            auth_token="",
+        )
+        self.assertFalse(ok_empty)
+        self.assertIn("missing", msg_empty.lower())
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+
+        # 2. Invalid token
+        ok_wrong, msg_wrong, _ = self.approval_center.approve_request(
+            request_id=req.request_id,
+            wallet=self.wallet,
+            marketplace=self.marketplace,
+            auth_token="INVALID-PIN-1234",
+        )
+        self.assertFalse(ok_wrong)
+        self.assertIn("failed", msg_wrong.lower())
+        self.assertEqual(self.wallet.invalid_auth_attempts, 1)
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
+
+        # 3. Direct unapproved payment exceeding $10 must be blocked by wallet
+        res = self.wallet.execute_payment(
+            amount=Decimal("15.00"),
+            recipient="Direct Vendor Bypass",
+            human_approved=False,
+        )
+        self.assertFalse(res.success)
+        self.assertEqual(self.wallet.balance, Decimal("100.00"))
 
 
 if __name__ == "__main__":

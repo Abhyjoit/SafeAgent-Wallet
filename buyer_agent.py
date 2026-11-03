@@ -14,12 +14,18 @@ Requirements:
 
 from decimal import Decimal
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 import config
 from marketplace import Marketplace, Product
-from purchase import AgentTraceStep, PurchaseFlowResult, SellerResponse
+from purchase import (
+    AgentTraceStep,
+    ApprovalCenter,
+    ApprovalRequest,
+    PurchaseFlowResult,
+    SellerResponse,
+)
 from seller_agent import SellerAgent, create_default_sellers
 from wallet import PaymentResult, SafeAgentWallet
 
@@ -40,10 +46,12 @@ class BuyerAgent:
         marketplace: Optional[Marketplace] = None,
         wallet: Optional[SafeAgentWallet] = None,
         sellers: Optional[Dict[str, SellerAgent]] = None,
+        approval_center: Optional[Any] = None,
     ):
         self.marketplace = marketplace or Marketplace()
         self.wallet = wallet or SafeAgentWallet(load_existing=True)
         self.sellers = sellers or create_default_sellers()
+        self.approval_center = approval_center
 
     def find_product(self, query: str) -> Optional[Product]:
         """Searches the marketplace for a product matching the query."""
@@ -272,6 +280,16 @@ class BuyerAgent:
                     ),
                 )
             )
+            appr_id = None
+            if self.approval_center:
+                appr_req = self.approval_center.create_request(
+                    product=product,
+                    seller=seller,
+                    user_query=user_request,
+                    order_id=seller_response.order_id,
+                )
+                appr_id = appr_req.request_id
+
             return PurchaseFlowResult(
                 success=False,
                 status="AWAITING_APPROVAL",
@@ -285,6 +303,7 @@ class BuyerAgent:
                 ),
                 requires_human_approval=True,
                 order_id=seller_response.order_id,
+                approval_request_id=appr_id,
             )
 
         # Other wallet rejection (insufficient balance, limit exceeded, locked, invalid auth, etc.)
