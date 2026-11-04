@@ -1,27 +1,28 @@
 """
-app.py - SafeAgent Wallet & Human Approval Center
+app.py - SafeAgent Wallet
 CommitCon 24-Hour Hackathon - Problem Statement #7: Stripe – Agents That Can Pay
-Hours 10–12: Human Approval Center UI Implementation
 
-Features:
-- Modern glass-like fintech dashboard styling (dark navy, subtle glowing borders, status badges).
-- Sidebar navigation: Dashboard, Marketplace, Approval Center (with live pending count badge), Transaction History, Security Settings.
-- Real-time Wallet Overview Cards (Balance, Total Spent, Remaining Limit, Security Status).
-- Visually prominent Human Approval Center for reviewing and authorizing payments exceeding $10.00.
-- Single-execution idempotency (duplicate clicks never create duplicate payments).
-- Full security re-verification (availability, balance, limit, lockout, rate limit).
-- Autonomous Buyer Agent & 3 Seller Agents with multi-agent communication trace.
-- Live Transaction Audit Ledger with filtering.
+Multi-Page Professional Fintech Security Dashboard:
+- Overview: Core balances, recent activity, system telemetry, and quick actions.
+- Wallet: Financial invariants, direct payment controls, catalog purchases, and resets.
+- Agent Activity: Autonomous Buyer Agent order negotiations, multi-agent traces, and seller catalog.
+- Approvals: Human-in-the-loop review center for transactions > $10.00 with inline confirmation.
+- Security Center: Rate limiting, runaway agent simulator, threat mitigation, and lock management.
+- Transactions: Operational transaction ledger with status filtering and live search.
+- Audit Logs: Database-backed immutable event ledger in SQLite with integer-cent precision.
+- Settings: Global financial rules, security policies, database health, and system metadata.
 """
 
 from decimal import Decimal
 import html
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
 from buyer_agent import BuyerAgent
 import config
+from database import DatabaseManager, cents_to_dollars, dollars_to_cents
 from marketplace import Marketplace, Product
 from purchase import (
     AgentTraceStep,
@@ -37,307 +38,189 @@ from wallet import PaymentResult, SafeAgentWallet
 # =============================================================================
 
 st.set_page_config(
-    page_title="SafeAgent Wallet - Human Approval Center",
+    page_title="SafeAgent Wallet — Security Dashboard",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# Professional Fintech Light CSS Theme
 st.markdown(
     """
     <style>
     /* Global Background and Typography */
     .stApp {
-        background-color: #0A0E1A;
-        color: #E2E8F0;
+        background-color: #F8FAFC;
+        color: #0F172A;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #FFFFFF;
+        border-right: 1px solid #E2E8F0;
     }
     
-    /* Modern Glass-like Metric Cards */
-    .metric-card {
-        background: rgba(19, 26, 43, 0.75);
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(59, 130, 246, 0.18);
-        border-radius: 14px;
-        padding: 18px 20px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 15px rgba(59, 130, 246, 0.05);
-        transition: transform 0.15s ease, border-color 0.15s ease;
+    [data-testid="stSidebar"] hr {
+        margin: 12px 0;
+        border-color: #E2E8F0;
     }
-    .metric-card:hover {
-        border-color: rgba(59, 130, 246, 0.4);
-        transform: translateY(-1px);
+
+    /* Fintech Card Container */
+    .fintech-card {
+        background-color: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
     }
-    .metric-label {
-        font-size: 0.78rem;
-        color: #8E9BAE;
+    
+    .fintech-card-header {
+        font-size: 1rem;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-bottom: 6px;
+        color: #0F172A;
+        margin-bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
-    .metric-value {
-        font-size: 1.85rem;
-        font-weight: 800;
-        color: #FFFFFF;
+
+    /* Metric Boxes */
+    .metric-box {
+        background-color: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 16px 18px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+        margin-bottom: 12px;
+    }
+    .metric-box-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 4px;
+    }
+    .metric-box-value {
+        font-size: 1.55rem;
+        font-weight: 700;
+        color: #0F172A;
         line-height: 1.2;
     }
-    .metric-subtext {
-        font-size: 0.78rem;
+    .metric-box-sub {
+        font-size: 0.75rem;
         color: #64748B;
-        margin-top: 5px;
+        margin-top: 4px;
     }
 
-    /* Approval Center Prominent Cards */
-    .approval-card {
-        background: linear-gradient(145deg, rgba(28, 25, 23, 0.85) 0%, rgba(20, 26, 38, 0.95) 100%);
-        backdrop-filter: blur(16px);
-        border: 2px solid #F59E0B;
-        border-radius: 16px;
-        padding: 24px;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(245, 158, 11, 0.15);
-        margin-bottom: 22px;
-    }
-    .approval-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 16px;
-        border-bottom: 1px solid rgba(245, 158, 11, 0.2);
-        padding-bottom: 12px;
-    }
-    .approval-title {
-        font-size: 1.35rem;
-        font-weight: 800;
-        color: #F8FAFC;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    .approval-amount {
-        font-size: 1.6rem;
-        font-weight: 800;
-        color: #38BDF8;
-    }
-    .approval-meta-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 12px;
-        background: rgba(15, 23, 42, 0.6);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-        padding: 14px;
-        margin-bottom: 16px;
-    }
-    .meta-item-label {
-        font-size: 0.72rem;
-        color: #94A3B8;
+    /* Status Pills */
+    .status-pill {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+        line-height: 1.4;
     }
-    .meta-item-value {
-        font-size: 0.92rem;
-        color: #F1F5F9;
-        font-weight: 600;
-        margin-top: 2px;
+    .status-pill-success {
+        background-color: #DCFCE7;
+        color: #15803D;
+        border: 1px solid #BBF7D0;
     }
-    .approval-reason-box {
-        background: rgba(245, 158, 11, 0.1);
-        border-left: 4px solid #F59E0B;
-        border-radius: 0 8px 8px 0;
+    .status-pill-warning {
+        background-color: #FEF3C7;
+        color: #B45309;
+        border: 1px solid #FDE68A;
+    }
+    .status-pill-danger {
+        background-color: #FEE2E2;
+        color: #B91C1C;
+        border: 1px solid #FECACA;
+    }
+    .status-pill-neutral {
+        background-color: #F1F5F9;
+        color: #475569;
+        border: 1px solid #E2E8F0;
+    }
+
+    /* Notice Banners */
+    .notice-banner-danger {
+        background-color: #FEF2F2;
+        border-left: 4px solid #DC2626;
+        border-radius: 0 6px 6px 0;
         padding: 12px 16px;
+        color: #991B1B;
         font-size: 0.88rem;
-        color: #FEF3C7;
-        margin-bottom: 18px;
+        margin-bottom: 16px;
+    }
+    .notice-banner-warning {
+        background-color: #FFFBEB;
+        border-left: 4px solid #D97706;
+        border-radius: 0 6px 6px 0;
+        padding: 12px 16px;
+        color: #92400E;
+        font-size: 0.88rem;
+        margin-bottom: 16px;
+    }
+    .notice-banner-success {
+        background-color: #F0FDF4;
+        border-left: 4px solid #16A34A;
+        border-radius: 0 6px 6px 0;
+        padding: 12px 16px;
+        color: #166534;
+        font-size: 0.88rem;
+        margin-bottom: 16px;
     }
 
-    /* Product Cards */
-    .product-box {
-        background: rgba(24, 30, 42, 0.75);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(59, 130, 246, 0.15);
-        border-radius: 14px;
-        padding: 22px;
-        min-height: 250px;
+    /* Product Grid Card */
+    .product-grid-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+        min-height: 180px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        margin-bottom: 16px;
-        transition: transform 0.15s ease, border-color 0.15s ease;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
     }
-    .product-box:hover {
-        border-color: #3B82F6;
-        transform: translateY(-2px);
+    .product-grid-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #0F172A;
     }
-    .product-icon {
-        font-size: 2.3rem;
-        margin-bottom: 8px;
-    }
-    .product-title {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #F8FAFC;
-        margin-bottom: 4px;
-    }
-    .product-desc {
-        font-size: 0.85rem;
-        color: #94A3B8;
-        min-height: 44px;
-        margin-bottom: 10px;
-    }
-    .product-price {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: #38BDF8;
-        margin-bottom: 6px;
-    }
-    .product-seller {
+    .product-grid-desc {
         font-size: 0.8rem;
-        color: #A5B4FC;
-        margin-bottom: 10px;
-    }
-
-    /* Status Badges */
-    .badge-pending {
-        background: rgba(245, 158, 11, 0.2);
-        color: #FBBF24;
-        border: 1px solid rgba(245, 158, 11, 0.4);
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-    }
-    .badge-approved {
-        background: rgba(16, 185, 129, 0.2);
-        color: #34D399;
-        border: 1px solid rgba(16, 185, 129, 0.4);
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-size: 0.75rem;
-        font-weight: 700;
-    }
-    .badge-rejected {
-        background: rgba(239, 68, 68, 0.2);
-        color: #F87171;
-        border: 1px solid rgba(239, 68, 68, 0.4);
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-size: 0.75rem;
-        font-weight: 700;
-    }
-    .badge-blocked {
-        background: rgba(239, 68, 68, 0.3);
-        color: #FCA5A5;
-        border: 1px solid rgba(239, 68, 68, 0.7);
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0.05em;
-    }
-    .runaway-alert-box {
-        background: linear-gradient(135deg, rgba(88, 28, 28, 0.92) 0%, rgba(30, 20, 28, 0.96) 100%);
-        backdrop-filter: blur(16px);
-        border: 2px solid #EF4444;
-        border-radius: 16px;
-        padding: 22px 26px;
-        margin-bottom: 24px;
-        box-shadow: 0 10px 30px rgba(239, 68, 68, 0.3), 0 0 25px rgba(239, 68, 68, 0.2);
-    }
-    .runaway-header {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 8px;
-    }
-    .runaway-meta-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 12px;
-        background: rgba(15, 23, 42, 0.65);
-        border: 1px solid rgba(239, 68, 68, 0.25);
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-top: 12px;
-        font-size: 0.85rem;
-        color: #E2E8F0;
-    }
-    .badge-auto {
-        background: rgba(16, 185, 129, 0.15);
-        color: #34D399;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-        border-radius: 9999px;
-        padding: 3px 10px;
-        font-size: 0.72rem;
-        font-weight: 600;
-    }
-    .badge-outofstock {
-        background: rgba(239, 68, 68, 0.15);
-        color: #F87171;
-        border: 1px solid rgba(239, 68, 68, 0.3);
-        border-radius: 9999px;
-        padding: 3px 10px;
-        font-size: 0.72rem;
-        font-weight: 600;
-    }
-
-    /* Trace Timeline */
-    .trace-card {
-        background: #131A2B;
-        border: 1px solid #232D42;
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-bottom: 8px;
-    }
-    .trace-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 4px;
-    }
-    .trace-agent {
-        font-size: 0.85rem;
-        font-weight: 700;
-    }
-    .trace-time {
-        font-size: 0.75rem;
         color: #64748B;
+        margin: 4px 0 8px 0;
     }
-    .trace-action {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #E2E8F0;
-        margin-bottom: 3px;
-    }
-    .trace-details {
-        font-size: 0.82rem;
-        color: #94A3B8;
+    .product-grid-price {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: #0F172A;
     }
 
-    /* Clean Empty State */
+    /* Clean Empty State Box */
     .empty-state-box {
-        background: rgba(19, 26, 43, 0.6);
-        border: 2px dashed rgba(59, 130, 246, 0.25);
-        border-radius: 16px;
-        padding: 48px 24px;
+        background-color: #FFFFFF;
+        border: 1px dashed #CBD5E1;
+        border-radius: 8px;
+        padding: 36px 20px;
         text-align: center;
-        margin: 20px 0;
-    }
-    .empty-state-icon {
-        font-size: 3rem;
-        margin-bottom: 12px;
+        margin: 16px 0;
     }
     .empty-state-title {
-        font-size: 1.25rem;
-        font-weight: 700;
-        color: #F8FAFC;
-        margin-bottom: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: #334155;
+        margin-bottom: 4px;
     }
     .empty-state-desc {
-        font-size: 0.88rem;
-        color: #94A3B8;
-        max-width: 500px;
-        margin: 0 auto;
+        font-size: 0.82rem;
+        color: #64748B;
     }
     </style>
     """,
@@ -346,7 +229,7 @@ st.markdown(
 
 
 # =============================================================================
-# 2. SESSION STATE: WALLET & MULTI-AGENT SYSTEM INITIALIZATION
+# 2. SESSION STATE INITIALIZATION
 # =============================================================================
 
 if "wallet" not in st.session_state:
@@ -375,8 +258,11 @@ if "last_agent_result" not in st.session_state:
 if "simulation_results" not in st.session_state:
     st.session_state.simulation_results = None
 
-if "approval_alert" not in st.session_state:
-    st.session_state.approval_alert = None
+if "action_notice" not in st.session_state:
+    st.session_state.action_notice = None
+
+if "agent_history" not in st.session_state:
+    st.session_state.agent_history = []
 
 # Active references
 wallet: SafeAgentWallet = st.session_state.wallet
@@ -387,26 +273,89 @@ buyer_agent: BuyerAgent = st.session_state.buyer_agent
 
 
 # =============================================================================
-# 3. INTERACTION CALLBACK HANDLERS
+# 3. ACTION HANDLERS
 # =============================================================================
 
+def set_notice(level: str, text: str) -> None:
+    """Sets a global notification message."""
+    st.session_state.action_notice = (level, text)
 
-def handle_agent_purchase(user_query: str) -> None:
-    """Dispatches a natural-language purchase directive to the Buyer Agent."""
-    if not user_query or not user_query.strip():
+
+def render_notice() -> None:
+    """Renders any queued notification banner."""
+    if st.session_state.action_notice:
+        level, text = st.session_state.action_notice
+        if level == "success":
+            st.markdown(f'<div class="notice-banner-success">{html.escape(text)}</div>', unsafe_allow_html=True)
+        elif level == "warning":
+            st.markdown(f'<div class="notice-banner-warning">{html.escape(text)}</div>', unsafe_allow_html=True)
+        elif level == "danger":
+            st.markdown(f'<div class="notice-banner-danger">{html.escape(text)}</div>', unsafe_allow_html=True)
+        st.session_state.action_notice = None
+
+
+def handle_purchase_directive(query_text: str) -> None:
+    """Dispatches a natural-language purchase directive through Buyer Agent."""
+    if not query_text or not query_text.strip():
+        return
+    res: PurchaseFlowResult = buyer_agent.execute_purchase(query_text.strip())
+    st.session_state.last_agent_result = res
+    st.session_state.agent_history.insert(0, {
+        "query": query_text.strip(),
+        "status": res.status,
+        "product_name": res.product.name if res.product else "None",
+        "price": f"${res.product.price:.2f}" if res.product else "—",
+        "seller": res.product.seller_id if res.product else "—",
+        "order_id": res.order_id or "—",
+        "summary": res.summary_message,
+    })
+
+    if res.status == "COMPLETED":
+        set_notice("success", f"Purchase completed: {res.summary_message}")
+    elif res.status == "AWAITING_APPROVAL":
+        set_notice("warning", f"Human approval required: Order queued in Approvals ({res.summary_message})")
+    elif res.status == "NOT_FOUND":
+        set_notice("warning", f"Catalog search: {res.summary_message}")
+    else:
+        set_notice("danger", f"Purchase stopped: {res.summary_message}")
+
+
+def handle_approve(request_id: str, auth_token: str) -> None:
+    """Executes a human approval on a pending request."""
+    if not auth_token or not auth_token.strip():
+        set_notice("danger", "Authorization failed: A valid authorization credential token is required.")
         return
 
-    res: PurchaseFlowResult = buyer_agent.execute_purchase(user_query.strip())
-    st.session_state.last_agent_result = res
-
-    if res.status == "AWAITING_APPROVAL":
-        st.session_state.approval_alert = (
-            f"⚠️ Purchase directive '{user_query}' requires human authorization. "
-            f"Review it in the Approval Center."
+    ok, msg, wallet_res = approval_center.approve_request(
+        request_id=request_id,
+        wallet=wallet,
+        marketplace=marketplace,
+        auth_token=auth_token.strip(),
+    )
+    if ok and wallet_res:
+        set_notice(
+            "success",
+            f"Payment Authorized: Transaction {wallet_res.transaction_id} executed. "
+            f"Deducted ${wallet_res.amount:.2f}. Remaining balance: ${wallet_res.balance:.2f}."
         )
+    else:
+        set_notice("danger", f"Authorization Rejected: {msg}")
 
 
-def handle_runaway_simulation() -> None:
+def handle_reject(request_id: str, reason: str) -> None:
+    """Rejects a pending approval request."""
+    ok, msg = approval_center.reject_request(
+        request_id=request_id,
+        wallet=wallet,
+        reason=reason.strip() or "Declined by human reviewer.",
+    )
+    if ok:
+        set_notice("success", f"Request Rejected: {msg}")
+    else:
+        set_notice("danger", f"Rejection Error: {msg}")
+
+
+def handle_runaway_sim() -> None:
     """Executes the controlled 10-attempt runaway agent attack simulation."""
     results = wallet.simulate_runaway_agent_attack(
         attempts=10,
@@ -415,43 +364,11 @@ def handle_runaway_simulation() -> None:
         agent_id="SafeAgent Buyer Bot v1.0",
     )
     st.session_state.simulation_results = results
-    st.session_state.approval_alert = (
-        "🚨 Runaway Agent Simulation Executed: 10 rapid purchase attempts generated. "
-        "Attempts 1–3 allowed, Attempt 4 rate-limited, Attempts 5–10 blocked by locked wallet."
+    set_notice(
+        "danger",
+        "Runaway Agent Simulation Executed: 10 rapid attempts generated. "
+        "Attempts 1–3 allowed, Attempt 4 rate-limited (Auto-Locked), Attempts 5–10 blocked with $0 lost."
     )
-
-
-def handle_approval_action(req_id: str, auth_token: str, confirmed: bool = True) -> None:
-    """Authorizes and executes a pending approval request."""
-    if not confirmed:
-        st.session_state.approval_alert = "⚠️ Confirmation required: please check the confirmation checkbox before approving."
-        return
-    ok, msg, res = approval_center.approve_request(
-        request_id=req_id,
-        wallet=wallet,
-        marketplace=marketplace,
-        auth_token=auth_token.strip(),
-    )
-    if ok and res:
-        st.session_state.approval_alert = (
-            f"✅ Payment Approved & Executed! TxID: {res.transaction_id} | "
-            f"Amount: ${res.amount:.2f} | Remaining Balance: ${res.balance:.2f}"
-        )
-    else:
-        st.session_state.approval_alert = f"❌ Authorization Denied / Failed: {msg}"
-
-
-def handle_rejection_action(req_id: str, reason: str = "Declined by human reviewer.", confirmed: bool = True) -> None:
-    """Rejects a pending approval request safely with $0 deduction."""
-    if not confirmed:
-        st.session_state.approval_alert = "⚠️ Confirmation required: please check the confirmation checkbox before rejecting."
-        return
-    ok, msg = approval_center.reject_request(
-        request_id=req_id,
-        wallet=wallet,
-        reason=reason,
-    )
-    st.session_state.approval_alert = f"🛑 Request Rejected: {msg}"
 
 
 def handle_reset_all() -> None:
@@ -461,1008 +378,1092 @@ def handle_reset_all() -> None:
     approval_center.clear()
     st.session_state.last_agent_result = None
     st.session_state.simulation_results = None
-    st.session_state.approval_alert = "🔄 Wallet & Marketplace reset to $100.00 pristine state."
-
-
-def handle_reset_rate_limiter() -> None:
-    """Clears rate limiter window."""
-    wallet.reset_rate_limiter()
-    st.session_state.approval_alert = "⏱️ Rate limiter rolling window reset."
-
-
-def handle_unlock_wallet() -> None:
-    """Unlocks wallet."""
-    wallet.unlock()
-    st.session_state.approval_alert = "🔓 Wallet successfully unlocked."
-
-
-def handle_toggle_availability(product_id: str) -> None:
-    """Toggles product in-stock availability for testing."""
-    prod = marketplace.get_product(product_id)
-    if prod:
-        marketplace.set_availability(product_id, not prod.availability)
+    st.session_state.agent_history.clear()
+    set_notice("success", "Wallet and marketplace state reset to $100.00 initial balance.")
 
 
 # =============================================================================
-# 4. SIDEBAR NAVIGATION & SYSTEM CONTROLS
+# 4. SIDEBAR NAVIGATION & SYSTEM TELEMETRY
 # =============================================================================
 
 with st.sidebar:
     st.markdown(
         """
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-            <span style="font-size: 1.8rem;">🛡️</span>
-            <div>
-                <div style="font-size: 1.15rem; font-weight: 800; color: #FFFFFF;">SafeAgent Wallet</div>
-                <div style="font-size: 0.72rem; color: #60A5FA; font-weight: 600;">Stripe Agent Security v2.0</div>
-            </div>
+        <div style="padding: 4px 0 12px 0;">
+            <div style="font-size: 1.15rem; font-weight: 700; color: #0F172A; letter-spacing: -0.02em;">SafeAgent Wallet</div>
+            <div style="font-size: 0.75rem; color: #64748B;">Autonomous Agent Payment Gateway</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    pending_cnt = approval_center.get_pending_count()
-    approval_nav_label = f"🛡️ Approval Center ({pending_cnt})" if pending_cnt > 0 else "🛡️ Approval Center"
+    pending_count = approval_center.get_pending_count()
+    approvals_label = f"Approvals ({pending_count})" if pending_count > 0 else "Approvals"
 
-    nav_selection = st.radio(
-        "Navigation",
-        [
-            "📊 Dashboard",
-            "🚨 Runaway Agent Simulator",
-            "🛒 Marketplace",
-            approval_nav_label,
-            "📋 Transaction History",
-            "⚙️ Security Settings",
-        ],
+    nav_options = [
+        "Overview",
+        "Wallet",
+        "Agent Activity",
+        approvals_label,
+        "Security Center",
+        "Transactions",
+        "Audit Logs",
+        "Settings",
+    ]
+
+    selected_raw = st.radio(
+        "Navigation Menu",
+        nav_options,
+        index=0,
         label_visibility="collapsed",
     )
 
-    st.divider()
-
-    # Diagnostics Meter
-    st.markdown("#### 📡 System Status")
-    status_text = "🔴 LOCKED" if wallet.is_locked else "🟢 ACTIVE"
-    st.markdown(f"**Wallet State:** `{status_text}`")
-    st.markdown(f"**Pending Approvals:** `{pending_cnt}` requests")
-    current_requests = wallet._rate_limiter.get_request_count()
-    st.markdown(f"**Rate Limit:** `{current_requests} / {config.RATE_LIMIT_MAX_REQUESTS}` in 60s")
-    failed_attempts = wallet.invalid_auth_attempts
-    st.markdown(f"**Failed Auth:** `{failed_attempts} / {config.MAX_INVALID_AUTH_ATTEMPTS}` attempts")
-    st.markdown(f"**Blocked Attempts:** `{wallet.blocked_attempts_count}` recorded")
+    current_page = "Approvals" if "Approvals" in selected_raw else selected_raw
 
     st.divider()
 
-    st.markdown("#### ⚙️ Developer Shortcuts")
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        st.button("🔄 Reset All", on_click=handle_reset_all, width="stretch", help="Reset balance and history")
-    with col_s2:
-        st.button("⏱️ Reset Rate", on_click=handle_reset_rate_limiter, width="stretch", help="Clear rate limit window")
+    # System Telemetry Indicator
+    st.markdown("<div style='font-size: 0.75rem; font-weight: 600; color: #64748B; text-transform: uppercase; margin-bottom: 6px;'>System Telemetry</div>", unsafe_allow_html=True)
+    
+    # Status badges
+    lock_badge = '<span class="status-pill status-pill-danger">Locked</span>' if wallet.is_locked else '<span class="status-pill status-pill-success">Active</span>'
+    db_badge = '<span class="status-pill status-pill-success">Connected</span>'
+    
+    st.markdown(
+        f"""
+        <div style="font-size: 0.82rem; line-height: 1.8;">
+            <div><b>Wallet State:</b> {lock_badge}</div>
+            <div><b>Database:</b> {db_badge} <code style="font-size: 0.75rem;">SQLite WAL</code></div>
+            <div><b>Pending Queue:</b> <span class="status-pill status-pill-{'warning' if pending_count > 0 else 'neutral'}">{pending_count} items</span></div>
+            <div><b>Rate Usage:</b> {wallet._rate_limiter.get_request_count()} / {config.RATE_LIMIT_MAX_REQUESTS} (60s)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
+    st.divider()
+
+    # Emergency / Quick Controls
+    st.markdown("<div style='font-size: 0.75rem; font-weight: 600; color: #64748B; text-transform: uppercase; margin-bottom: 6px;'>Quick Controls</div>", unsafe_allow_html=True)
     if wallet.is_locked:
-        st.warning("⚠️ Wallet is locked.")
-        st.button("🔓 Admin Unlock", on_click=handle_unlock_wallet, type="primary", width="stretch")
+        if st.button("Unlock Wallet", type="primary", use_container_width=True):
+            wallet.unlock()
+            set_notice("success", "Wallet unlocked by administrator.")
+            st.rerun()
+
+    c_sb1, c_sb2 = st.columns(2)
+    with c_sb1:
+        if st.button("Reset Rate", use_container_width=True, help="Clears rolling 60-second window"):
+            wallet.reset_rate_limiter()
+            set_notice("success", "Rate limiter window cleared.")
+            st.rerun()
+    with c_sb2:
+        if st.button("Reset All", use_container_width=True, help="Reset wallet to $100.00"):
+            handle_reset_all()
+            st.rerun()
 
 
 # =============================================================================
-# 5. HEADER & WALLET OVERVIEW CARDS (PROMINENT FINTECH METRICS)
+# PAGE 1: OVERVIEW
 # =============================================================================
 
-h_col1, h_col2 = st.columns([3, 1])
-with h_col1:
-    st.title("SafeAgent Wallet")
-    st.markdown("##### Secure AI-powered payment wallet • Problem Statement #7: Stripe Agents That Can Pay")
+if current_page == "Overview":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Overview</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Real-time operational summary and financial invariants for SafeAgent Wallet.</p>", unsafe_allow_html=True)
+    render_notice()
 
-with h_col2:
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div style="background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 10px; padding: 10px 14px; text-align: center;">
-            <span style="color: #60A5FA; font-size: 0.8rem; font-weight: 800;">🟡 SIMULATED WALLET</span><br>
-            <span style="color: #94A3B8; font-size: 0.72rem;">CommitCon Sandbox • No Real Funds</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Top Level Overview Cards
+    total_tx_count = wallet.db.count_transactions()
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-st.write("")
-
-# -----------------------------------------------------------------------------
-# PROMINENT SECURITY ALERT: RUNAWAY AGENT ATTACK DETECTION
-# -----------------------------------------------------------------------------
-alert_info = wallet.runaway_alert
-is_rate_locked = wallet.is_locked and (config.REASON_RATE_LIMIT_EXCEEDED in str(wallet.lock_reason) or alert_info is not None)
-
-if is_rate_locked or alert_info:
-    agent_name = alert_info.get("agent_id", "SafeAgent Buyer Bot v1.0") if alert_info else "SafeAgent Buyer Bot v1.0"
-    attempts_cnt = alert_info.get("attempts_count", 10) if alert_info else 10
-    lock_time = alert_info.get("lock_timestamp", wallet.lock_timestamp or "Just now") if alert_info else (wallet.lock_timestamp or "Just now")
-    blocked_cnt = wallet.blocked_attempts_count
-
-    st.markdown(
-        f"""
-        <div class="runaway-alert-box">
-            <div class="runaway-header">
-                <span style="font-size: 2.2rem;">🚨</span>
-                <div>
-                    <div style="font-size: 1.25rem; font-weight: 800; color: #FFFFFF; letter-spacing: -0.01em;">
-                        🚨 RUNAWAY AGENT DETECTED: Your AI agent exceeded the permitted purchase rate ({config.RATE_LIMIT_MAX_REQUESTS} transactions per {int(config.RATE_LIMIT_WINDOW_SECONDS)} seconds).
-                    </div>
-                    <div style="font-size: 0.9rem; color: #FCA5A5; margin-top: 3px;">
-                        Wallet has been automatically locked to protect your funds. No further automated or approved payments can execute.
-                    </div>
-                </div>
-            </div>
-            <div class="runaway-meta-grid">
-                <div>
-                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Agent ID</div>
-                    <div style="color: #38BDF8; font-weight: 700; margin-top: 2px;">🤖 {html.escape(agent_name)}</div>
-                </div>
-                <div>
-                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Rate Violation</div>
-                    <div style="color: #F87171; font-weight: 700; margin-top: 2px;">⚡ {attempts_cnt} attempts in 60s window</div>
-                </div>
-                <div>
-                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Lock Timestamp</div>
-                    <div style="font-weight: 600; margin-top: 2px;">🕒 {html.escape(str(lock_time))}</div>
-                </div>
-                <div>
-                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Blocked Transactions</div>
-                    <div style="color: #FCA5A5; font-weight: 800; margin-top: 2px;">🛑 {blocked_cnt} attempts blocked</div>
-                </div>
-                <div>
-                    <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase; font-weight: 700;">Wallet Status</div>
-                    <div style="margin-top: 2px;"><span class="badge-blocked">🔒 LOCKED</span></div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    col_al1, col_al2 = st.columns([4, 1])
-    with col_al2:
-        st.button("🔓 Admin Unlock Wallet", on_click=handle_unlock_wallet, type="primary", key="top_alert_unlock_btn", width="stretch")
-    st.write("")
-
-# Wallet Overview Cards (Live values from SafeAgentWallet)
-col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-
-with col_m1:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">Available Balance</div>
-            <div class="metric-value" style="color: #10B981;">${wallet.balance:.2f}</div>
-            <div class="metric-subtext">Initial starting: ${wallet._initial_balance:.2f}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col_m2:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">Total Spent</div>
-            <div class="metric-value" style="color: #F59E0B;">${wallet.total_spent:.2f}</div>
-            <div class="metric-subtext">Cumulative spending</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col_m3:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">Remaining Spending Limit</div>
-            <div class="metric-value" style="color: #38BDF8;">${wallet.remaining_spending_limit:.2f}</div>
-            <div class="metric-subtext">Lifetime limit: ${wallet.spending_limit:.2f}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col_m4:
-    stat_color = "#EF4444" if wallet.is_locked else "#34D399"
-    stat_lbl = "LOCKED" if wallet.is_locked else "ACTIVE"
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">Wallet Status</div>
-            <div class="metric-value" style="color: {stat_color};">{stat_lbl}</div>
-            <div class="metric-subtext">Failed auth: {wallet.invalid_auth_attempts} / {config.MAX_INVALID_AUTH_ATTEMPTS}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.write("")
-
-# Action Alert Feedback Banner
-if st.session_state.approval_alert:
-    st.info(st.session_state.approval_alert)
-    st.session_state.approval_alert = None
-
-
-# =============================================================================
-# 6. VIEW: HUMAN APPROVAL CENTER (SECTION D - CORE REQUIREMENT)
-# =============================================================================
-
-if "Approval Center" in nav_selection:
-    st.markdown("## 🛡️ Human Approval Center")
-    st.markdown(
-        "Authorize or reject autonomous agent transactions that strictly exceed the "
-        f"**${config.AUTO_PAYMENT_THRESHOLD:.2f}** automatic payment policy."
-    )
-
-    pending_list = approval_center.get_pending_requests()
-
-    if not pending_list:
+    with col1:
         st.markdown(
-            """
-            <div class="empty-state-box">
-                <div class="empty-state-icon">✅</div>
-                <div class="empty-state-title">No pending approvals. Your wallet is up to date.</div>
-                <div class="empty-state-desc">
-                    When the Buyer Agent initiates a purchase exceeding $10.00, it will appear here for your review and authorization.
-                </div>
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Current Balance</div>
+                <div class="metric-box-value">${wallet.balance:.2f}</div>
+                <div class="metric-box-sub">Available virtual funds</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        st.caption("💡 **Quick Test Tip:** Go to the Dashboard or Marketplace and click **Buy Bluetooth Headphones ($15.00)** to generate a pending approval.")
-    else:
-        st.markdown(f"**Pending Authorizations ({len(pending_list)}):**")
+    with col2:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Initial Balance</div>
+                <div class="metric-box-value">${config.INITIAL_BALANCE:.2f}</div>
+                <div class="metric-box-sub">Starting deposit</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        for req in pending_list:
-            safe_pname = html.escape(req.product_name)
-            safe_sname = html.escape(req.seller_name)
-            safe_bagent = html.escape(req.buyer_agent)
-            safe_reqid = html.escape(req.request_id)
-            safe_desc = html.escape(req.description)
-            safe_reason = html.escape(req.reason)
+    with col3:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Total Spent</div>
+                <div class="metric-box-value">${wallet.total_spent:.2f}</div>
+                <div class="metric-box-sub">Lifetime expenditure</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            desc_html = (
-                f"<div style='font-size: 0.88rem; color: #94A3B8; margin-bottom: 12px;'><b>Description:</b> {safe_desc}</div>"
-                if safe_desc
-                else ""
+    with col4:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Total Transactions</div>
+                <div class="metric-box-value">{total_tx_count}</div>
+                <div class="metric-box-sub">Logged in SQLite DB</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col5:
+        p_badge_cls = "status-pill-warning" if pending_count > 0 else "status-pill-neutral"
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Pending Approvals</div>
+                <div class="metric-box-value">{pending_count}</div>
+                <div class="metric-box-sub"><span class="status-pill {p_badge_cls}">Awaiting Review</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col6:
+        sec_text = "LOCKED" if wallet.is_locked else "ACTIVE"
+        sec_cls = "status-pill-danger" if wallet.is_locked else "status-pill-success"
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Security State</div>
+                <div class="metric-box-value" style="font-size: 1.25rem; padding-top: 4px;">
+                    <span class="status-pill {sec_cls}">{sec_text}</span>
+                </div>
+                <div class="metric-box-sub">Rate limit: 3 / 60s</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if wallet.is_locked:
+        lock_reason = wallet._auth_guard.lock_reason or "Security violation detected."
+        st.markdown(
+            f"""
+            <div class="notice-banner-danger">
+                <b>Wallet Locked:</b> {html.escape(str(lock_reason))} All payment requests are blocked. Use the sidebar control to unlock.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Sub-Grid: Recent Transactions & Quick Actions
+    g_col1, g_col2 = st.columns([1.6, 1.4])
+
+    with g_col1:
+        st.markdown(
+            """
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Recent Transactions</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Latest database records</span>
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        recent_txs = wallet.db.get_all_transactions(limit=5, latest_first=True)
+        if not recent_txs:
+            st.markdown(
+                """
+                <div class="empty-state-box">
+                    <div class="empty-state-title">No Transactions Recorded</div>
+                    <div class="empty-state-desc">Transactions initiated by agents will appear in this ledger.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
+        else:
+            rows = []
+            for t in recent_txs:
+                st_code = str(t.get("status", "")).upper()
+                rows.append({
+                    "Transaction ID": t.get("transaction_id", ""),
+                    "Merchant / Description": t.get("description", ""),
+                    "Amount": f"${float(t.get('amount', 0)):.2f}",
+                    "Status": st_code,
+                    "Timestamp": str(t.get("timestamp", ""))[:19].replace("T", " "),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
+    with g_col2:
+        st.markdown(
+            """
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Quick Purchase Actions</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">One-click automated tests</span>
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        qa_col1, qa_col2, qa_col3 = st.columns(3)
+        with qa_col1:
+            if st.button("Buy Cable\n$4.50 (Auto)", use_container_width=True, help="Executes automatically under $10 threshold"):
+                handle_purchase_directive("Buy USB-C Cable")
+                st.rerun()
+        with qa_col2:
+            if st.button("Buy Mouse\n$9.00 (Auto)", use_container_width=True, help="Executes automatically under $10 threshold"):
+                handle_purchase_directive("Buy Wireless Mouse")
+                st.rerun()
+        with qa_col3:
+            if st.button("Buy Audio\n$15.00 (Approval)", use_container_width=True, help="Exceeds $10: Triggers Human Approval Queue"):
+                handle_purchase_directive("Buy Bluetooth Headphones")
+                st.rerun()
+
+        st.divider()
+
+        st.markdown("<div style='font-size: 0.82rem; font-weight: 600; color: #334155; margin-bottom: 8px;'>Rogue Agent Defense</div>", unsafe_allow_html=True)
+        if st.button("Simulate Runaway Agent Attack (10 Rapid Attempts)", use_container_width=True, type="secondary"):
+            handle_runaway_sim()
+            st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 2: WALLET
+# =============================================================================
+
+elif current_page == "Wallet":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Wallet Management</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Financial invariants, balance reserves, and direct payment execution controls.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    # Balance and Spending Limits Cards
+    w_col1, w_col2, w_col3, w_col4 = st.columns(4)
+    with w_col1:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Current Balance</div>
+                <div class="metric-box-value">${wallet.balance:.2f}</div>
+                <div class="metric-box-sub">Initial deposit: ${config.INITIAL_BALANCE:.2f}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with w_col2:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Total Spent</div>
+                <div class="metric-box-value">${wallet.total_spent:.2f}</div>
+                <div class="metric-box-sub">Cumulative expenditure</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with w_col3:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Remaining Spending Limit</div>
+                <div class="metric-box-value">${wallet.remaining_spending_limit:.2f}</div>
+                <div class="metric-box-sub">Lifetime limit: ${config.LIFETIME_SPENDING_LIMIT:.2f}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with w_col4:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Auto Payment Threshold</div>
+                <div class="metric-box-value">${config.AUTO_PAYMENT_THRESHOLD:.2f}</div>
+                <div class="metric-box-sub">Payments strictly above require approval</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.write("")
+
+    # Direct Payment Execution Form
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Manual Payment Authorization Test</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Direct API validation harness</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.form("manual_pay_form"):
+        pf_c1, pf_c2 = st.columns(2)
+        with pf_c1:
+            pay_recipient = st.text_input("Merchant / Recipient Description", value="Direct Test Vendor")
+            pay_amount = st.number_input("Payment Amount ($)", min_value=0.01, max_value=200.00, value=4.50, step=0.50)
+        with pf_c2:
+            pay_approved = st.checkbox("Include Human Approval Token", value=False, help="Required for amounts > $10.00")
+            pay_token = st.text_input("Authorization Token", value=config.DEFAULT_AUTH_TOKEN if pay_approved else "")
+
+        submitted = st.form_submit_button("Submit Payment to SafeAgent Wallet", type="primary")
+        if submitted:
+            res: PaymentResult = wallet.execute_payment(
+                amount=Decimal(str(pay_amount)),
+                recipient=pay_recipient.strip(),
+                human_approved=True if pay_approved else None,
+                auth_token=pay_token.strip(),
+                agent_id="Manual UI Harness",
+            )
+            if res.success:
+                set_notice("success", f"Payment Successful: {res.transaction_id} | Amount: ${res.amount:.2f} | Remaining: ${res.balance:.2f}")
+            elif res.requires_human_approval:
+                set_notice("warning", f"Security Hold: {res.reason} (Route to Approval Center)")
+            else:
+                set_notice("danger", f"Payment Rejected: {res.reason}")
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Catalog Quick Checkout
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Marketplace Quick Checkout</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Test standard catalog items</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    prods = marketplace.get_all_products()
+    p_cols = st.columns(len(prods))
+    for idx, p in enumerate(prods):
+        with p_cols[idx]:
             st.markdown(
                 f"""
-                <div class="approval-card">
-                    <div class="approval-header">
-                        <div class="approval-title">
-                            <span>{req.image_icon}</span>
-                            <span>{safe_pname}</span>
-                            <span class="badge-pending">{req.status}</span>
-                        </div>
-                        <div class="approval-amount">${req.amount:.2f}</div>
+                <div class="product-grid-card">
+                    <div>
+                        <div class="product-grid-title">{html.escape(p.name)}</div>
+                        <div class="product-grid-desc">{html.escape(p.description)}</div>
                     </div>
-                    {desc_html}
-                    <div class="approval-meta-grid">
-                        <div>
-                            <div class="meta-item-label">Request ID</div>
-                            <div class="meta-item-value"><code>{safe_reqid}</code></div>
-                        </div>
-                        <div>
-                            <div class="meta-item-label">Amount</div>
-                            <div class="meta-item-value" style="color: #38BDF8;">${req.amount:.2f}</div>
-                        </div>
-                        <div>
-                            <div class="meta-item-label">Status</div>
-                            <div class="meta-item-value"><span class="badge-pending">{req.status}</span></div>
-                        </div>
-                        <div>
-                            <div class="meta-item-label">Timestamp</div>
-                            <div class="meta-item-value">🕒 {req.timestamp}</div>
-                        </div>
-                        <div>
-                            <div class="meta-item-label">Buyer Agent</div>
-                            <div class="meta-item-value">🤖 {safe_bagent}</div>
-                        </div>
-                        <div>
-                            <div class="meta-item-label">Merchant / Seller</div>
-                            <div class="meta-item-value">🏪 {safe_sname}</div>
-                        </div>
+                    <div>
+                        <div class="product-grid-price">${p.price:.2f}</div>
+                        <div style="font-size: 0.72rem; color: #64748B; margin-bottom: 8px;">Seller: <code>{p.seller_id}</code></div>
                     </div>
-                    <div class="approval-reason-box">
-                        <b>Authorization Policy:</b> {safe_reason}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button(f"Buy {p.name}", key=f"btn_buy_{p.product_id}", use_container_width=True):
+                handle_purchase_directive(f"Buy {p.name}")
+                st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Administrative Controls
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Administrative Controls</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Maintenance and reset operations</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    ac_col1, ac_col2, ac_col3 = st.columns(3)
+    with ac_col1:
+        if wallet.is_locked:
+            if st.button("Unlock Wallet", type="primary", use_container_width=True):
+                wallet.unlock()
+                set_notice("success", "Wallet unlocked.")
+                st.rerun()
+        else:
+            if st.button("Lock Wallet (Quarantine)", use_container_width=True):
+                wallet.lock(reason="Administrative manual lock.")
+                set_notice("warning", "Wallet locked for quarantine.")
+                st.rerun()
+    with ac_col2:
+        if st.button("Reset Rate Limiter Window", use_container_width=True):
+            wallet.reset_rate_limiter()
+            set_notice("success", "Rate limiter sliding window reset.")
+            st.rerun()
+    with ac_col3:
+        confirm_reset = st.checkbox("Confirm Complete State Reset", key="chk_reset_confirm")
+        if st.button("Reset Wallet to $100.00", disabled=not confirm_reset, use_container_width=True):
+            handle_reset_all()
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 3: AGENT ACTIVITY
+# =============================================================================
+
+elif current_page == "Agent Activity":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Agent Activity</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Autonomous purchase negotiations, seller invoicing, and multi-agent interaction trace logs.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    # Agent Directive Bar
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Issue Agent Purchase Directive</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Autonomous Buyer Agent Natural Language Dispatch</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    dir_col1, dir_col2 = st.columns([3.5, 1])
+    with dir_col1:
+        user_query = st.text_input(
+            "Natural Language Directive",
+            placeholder="e.g. 'I need a durable USB-C charging cable', 'Order headphones', 'Buy mouse'",
+            label_visibility="collapsed",
+        )
+    with dir_col2:
+        dispatch_btn = st.button("Dispatch Buyer Agent", type="primary", use_container_width=True)
+
+    if dispatch_btn and user_query:
+        handle_purchase_directive(user_query)
+        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Latest Multi-Agent Execution Trace
+    if st.session_state.last_agent_result:
+        res: PurchaseFlowResult = st.session_state.last_agent_result
+        st.markdown(
+            f"""
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Multi-Agent Interaction Trace</span>
+                    <span class="status-pill status-pill-{'success' if res.success else ('warning' if res.status == 'AWAITING_APPROVAL' else 'danger')}">{res.status}</span>
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        for step in res.trace:
+            st.markdown(
+                f"""
+                <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 3px;">
+                        <span>{html.escape(step.agent)} &rarr; {html.escape(step.action)}</span>
+                        <span style="color: #94A3B8; font-weight: normal;">{step.timestamp}</span>
+                    </div>
+                    <div style="font-size: 0.82rem; color: #475569;">{html.escape(step.details)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Activity Table
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Recent Agent Directives & Requests</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">History of agent-negotiated orders</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not st.session_state.agent_history:
+        st.markdown(
+            """
+            <div class="empty-state-box">
+                <div class="empty-state-title">No Agent Activity Logged Yet</div>
+                <div class="empty-state-desc">Dispatch a purchase directive above or use Quick Actions to see agent negotiation traces.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.dataframe(st.session_state.agent_history, use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Seller Agents Directory & Inventory Control
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Registered Seller Agents & Inventory Status</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Simulated vendor endpoints</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    s_col1, s_col2, s_col3 = st.columns(3)
+    seller_list = list(sellers.values())
+    for idx, s in enumerate(seller_list):
+        with [s_col1, s_col2, s_col3][idx % 3]:
+            prod = marketplace.get_product(s.product_id)
+            is_avail = prod.availability if prod else False
+            avail_badge = '<span class="status-pill status-pill-success">In Stock</span>' if is_avail else '<span class="status-pill status-pill-danger">Out of Stock</span>'
+            st.markdown(
+                f"""
+                <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 14px; margin-bottom: 10px;">
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #0F172A;">{html.escape(s.name)}</div>
+                    <div style="font-size: 0.75rem; color: #64748B; margin: 2px 0 6px 0;">Seller ID: <code>{s.seller_id}</code></div>
+                    <div style="font-size: 0.82rem; color: #334155; margin-bottom: 8px;">Product: <b>{html.escape(s.product_name)}</b> (${s.price:.2f})</div>
+                    <div>Status: {avail_badge}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            btn_txt = "Mark Out of Stock" if is_avail else "Restock Product"
+            if st.button(btn_txt, key=f"tgl_{s.seller_id}", use_container_width=True):
+                marketplace.set_availability(s.product_id, not is_avail)
+                st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 4: APPROVALS
+# =============================================================================
+
+elif current_page == "Approvals":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Human Approval Center</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Review, authorize, or decline purchase requests exceeding the $10.00 automatic threshold.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    pending_reqs = approval_center.get_pending_requests()
+
+    st.markdown(
+        f"""
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Pending Approval Queue ({len(pending_reqs)})</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Requires explicit human authorization token</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not pending_reqs:
+        st.markdown(
+            """
+            <div class="empty-state-box">
+                <div class="empty-state-title">No Pending Requests</div>
+                <div class="empty-state-desc">Transactions exceeding the $10.00 threshold will be intercepted and queued here for human review.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        for req in pending_reqs:
+            st.markdown(
+                f"""
+                <div style="background: #FFFFFF; border: 1px solid #CBD5E1; border-left: 4px solid #D97706; border-radius: 8px; padding: 18px; margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            <span style="font-size: 1.1rem; font-weight: 700; color: #0F172A;">{html.escape(req.product_name)}</span>
+                            <span style="font-size: 0.8rem; color: #64748B; margin-left: 8px;">Order: <code>{html.escape(req.order_id or req.request_id)}</code></span>
+                        </div>
+                        <div style="font-size: 1.35rem; font-weight: 800; color: #0F172A;">${req.amount:.2f}</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; font-size: 0.82rem;">
+                        <div><span style="color: #64748B;">Request ID:</span> <br><code>{req.request_id}</code></div>
+                        <div><span style="color: #64748B;">Merchant / Seller:</span> <br><b>{html.escape(req.seller_name)}</b></div>
+                        <div><span style="color: #64748B;">Buyer Agent:</span> <br>{html.escape(req.buyer_agent)}</div>
+                        <div><span style="color: #64748B;">Submitted At:</span> <br>{req.timestamp[:19].replace('T', ' ')}</div>
+                    </div>
+                    <div style="background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; padding: 10px 14px; font-size: 0.82rem; color: #92400E; margin-bottom: 14px;">
+                        <b>Security Intercept:</b> {html.escape(req.reason)}
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            # Interactive Authorization Control
-            col_act1, col_act2, col_act3 = st.columns([2, 1, 1])
-
-            with col_act1:
-                token_val = st.text_input(
-                    "Human Authorization Token / PIN:",
-                    value=config.DEFAULT_AUTH_TOKEN,
-                    key=f"token_{req.request_id}",
-                    help="Default valid token: COMMITCON-SECURE-2026. Change to test invalid authorization rejection.",
-                )
-                confirm_auth = st.checkbox(
-                    "I confirm authorization decision for this transaction",
-                    value=True,
-                    key=f"chk_conf_{req.request_id}",
-                    help="Safety confirmation requirement",
-                )
-
-            with col_act2:
-                st.write("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                st.button(
-                    "✅ APPROVE",
-                    key=f"btn_appr_{req.request_id}",
-                    on_click=handle_approval_action,
-                    args=(req.request_id, token_val, confirm_auth),
-                    type="primary",
-                    width="stretch",
-                    disabled=wallet.is_locked,
-                    help="Authorizes payment through SafeAgentWallet after security checks.",
-                )
-
-            with col_act3:
-                st.write("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                st.button(
-                    "❌ REJECT",
-                    key=f"btn_rej_{req.request_id}",
-                    on_click=handle_rejection_action,
-                    args=(req.request_id, "Declined by human reviewer.", confirm_auth),
-                    width="stretch",
-                    help="Rejects the request. Deducts $0 from the wallet.",
-                )
+            # Inline Authorization Action Controls
+            with st.container():
+                auth_c1, auth_c2, auth_c3 = st.columns([1.5, 1, 1])
+                with auth_c1:
+                    auth_token_input = st.text_input(
+                        "Authorization Credential Token",
+                        value=config.DEFAULT_AUTH_TOKEN,
+                        key=f"token_{req.request_id}",
+                        help="Cryptographic credential token required to authorize human transactions.",
+                    )
+                with auth_c2:
+                    confirm_auth = st.checkbox("Confirm Authorization", key=f"chk_auth_{req.request_id}")
+                    if st.button("Approve Payment", key=f"btn_appr_{req.request_id}", type="primary", disabled=not confirm_auth, use_container_width=True):
+                        handle_approve(req.request_id, auth_token_input)
+                        st.rerun()
+                with auth_c3:
+                    reject_reason = st.text_input("Rejection Reason", value="Declined by human reviewer", key=f"rej_reason_{req.request_id}")
+                    if st.button("Reject Request", key=f"btn_rej_{req.request_id}", type="secondary", use_container_width=True):
+                        handle_reject(req.request_id, reject_reason)
+                        st.rerun()
 
             st.write("")
 
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# =============================================================================
-# 7. VIEW: DASHBOARD (OVERVIEW & AUTONOMOUS BUYER AGENT)
-# =============================================================================
-
-elif "Dashboard" in nav_selection:
-    st.markdown("## 📊 Autonomous Agent Operations")
-
-    # Alert if approvals pending
-    p_cnt = approval_center.get_pending_count()
-    if p_cnt > 0:
-        st.warning(f"⚠️ You have **{p_cnt} pending payment authorization(s)** waiting in the Human Approval Center.")
-
+    # Historical Decisions
     st.markdown(
         """
-        <div style="background: rgba(19, 26, 43, 0.7); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
-            <h4 style="margin: 0 0 6px 0; color: #F8FAFC;">🤖 Buyer Agent Directive Terminal</h4>
-            <span style="font-size: 0.88rem; color: #94A3B8;">
-                Instruct the autonomous Buyer Agent to search the marketplace, negotiate with Seller Agents, and route payments through SafeAgentWallet.
-            </span>
-        </div>
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Historical Approval Decisions</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Past human reviewer determinations</span>
+            </div>
         """,
         unsafe_allow_html=True,
     )
-
-    d_col1, d_col2 = st.columns([3, 1])
-    with d_col1:
-        agent_input = st.text_input(
-            "Enter purchase directive:",
-            value="Buy Bluetooth Headphones",
-            placeholder="e.g. Buy Bluetooth Headphones, Buy USB-C Cable...",
-            key="dash_prompt_input",
-        )
-    with d_col2:
-        st.write("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-        st.button(
-            "🚀 Execute Directive",
-            on_click=handle_agent_purchase,
-            args=(agent_input,),
-            type="primary",
-            width="stretch",
-            disabled=wallet.is_locked,
-        )
-
-    st.markdown("**Quick Test Scenarios:**")
-    q1, q2, q3, q4 = st.columns(4)
-    with q1:
-        st.button("⚡ Cable ($4.50 - Auto)", on_click=handle_agent_purchase, args=("Buy USB-C Cable",), width="stretch")
-    with q2:
-        st.button("⚡ Mouse ($9.00 - Auto)", on_click=handle_agent_purchase, args=("Buy Wireless Mouse",), width="stretch")
-    with q3:
-        st.button("👤 Headphones ($15.00 - Approval)", on_click=handle_agent_purchase, args=("Buy Bluetooth Headphones",), width="stretch")
-    with q4:
-        st.button("❓ Invalid Product", on_click=handle_agent_purchase, args=("Buy Mechanical Keyboard",), width="stretch")
-
-    st.write("")
-
-    # Display Last Agent Result & Activity Trace
-    if st.session_state.last_agent_result:
-        res: PurchaseFlowResult = st.session_state.last_agent_result
-        safe_msg = html.escape(res.summary_message)
-
-        if res.success:
-            st.markdown(
-                f"""
-                <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #10B981; border-radius: 10px; padding: 14px 18px; margin-bottom: 16px;">
-                    <span style="font-size: 1.1rem; font-weight: 700; color: #34D399;">✅ Purchase Completed Successfully</span>
-                    <div style="font-size: 0.9rem; color: #E2E8F0; margin-top: 4px;">{safe_msg}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        elif res.status == "AWAITING_APPROVAL":
-            st.markdown(
-                f"""
-                <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid #F59E0B; border-radius: 10px; padding: 14px 18px; margin-bottom: 16px;">
-                    <span style="font-size: 1.1rem; font-weight: 700; color: #FBBF24;">⏸️ Queued in Human Approval Center</span>
-                    <div style="font-size: 0.9rem; color: #FEF3C7; margin-top: 4px;">{safe_msg}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"""
-                <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid #EF4444; border-radius: 10px; padding: 14px 18px; margin-bottom: 16px;">
-                    <span style="font-size: 1.1rem; font-weight: 700; color: #F87171;">❌ Purchase Rejected / Halted</span>
-                    <div style="font-size: 0.9rem; color: #FECACA; margin-top: 4px;">{safe_msg}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("#### 📡 Agent Trace Log")
-        for step in res.trace:
-            agent_color = "#38BDF8"
-            if "Seller" in step.agent:
-                agent_color = "#A78BFA"
-            elif "Wallet" in step.agent:
-                agent_color = "#34D399" if "SUCCESS" in step.action else "#F87171"
-
-            st.markdown(
-                f"""
-                <div class="trace-card">
-                    <div class="trace-header">
-                        <span class="trace-agent" style="color: {agent_color};">● {html.escape(step.agent)}</span>
-                        <span class="trace-time">{step.timestamp}</span>
-                    </div>
-                    <div class="trace-action">{html.escape(step.action)}</div>
-                    <div class="trace-details">{html.escape(step.details)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-    # -------------------------------------------------------------------------
-    # RUNAWAY AGENT SIMULATOR SECTION (DASHBOARD)
-    # -------------------------------------------------------------------------
-    st.divider()
-    st.markdown("### 🚨 Runaway Agent Defense Simulator")
-    st.markdown(
-        "Test wallet resilience against a malfunctioning AI agent executing high-frequency payments in rapid succession. "
-        "Evaluates the rolling 60-second rate limiter (max 3 permitted), automatic wallet lockdown on attempt 4, and blocked attempt recording."
-    )
-
-    r_col1, r_col2 = st.columns([3, 1])
-    with r_col1:
-        st.markdown(
-            """
-            <div style="background: rgba(19, 26, 43, 0.7); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; padding: 16px 20px;">
-                <b style="color: #FCA5A5; font-size: 0.95rem;">🚨 Security Attack Scenario:</b> Sequence of 10 rapid purchase attempts from <code>SafeAgent Buyer Bot v1.0</code> ($4.50 each).<br>
-                <div style="font-size: 0.84rem; color: #94A3B8; margin-top: 6px; line-height: 1.5;">
-                    • <b>Attempts 1–3:</b> Allowed by wallet security policy ($4.50 each = $13.50 total deducted).<br>
-                    • <b>Attempt 4:</b> Rate limit breached (<code>RATE_LIMIT_EXCEEDED</code>). Wallet auto-locks instantly.<br>
-                    • <b>Attempts 5–10:</b> Blocked by locked wallet (<code>WALLET_LOCKED</code>) with $0 deducted.<br>
-                    • <b>Fund Preservation:</b> Exactly $31.50 saved from unauthorized rogue spending.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with r_col2:
-        st.write("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-        st.button(
-            "🚨 Simulate Runaway Agent Attack",
-            on_click=handle_runaway_simulation,
-            type="primary",
-            key="dash_sim_attack_btn",
-            width="stretch",
-            help="Generates exactly 10 rapid payment attempts to test runaway security policy.",
-        )
-        if wallet.is_locked:
-            st.button(
-                "🔓 Admin Unlock Wallet",
-                on_click=handle_unlock_wallet,
-                key="dash_sim_unlock_btn",
-                width="stretch",
-                help="Administratively restore wallet after simulation.",
-            )
-
-    # Render Simulation Results Table if simulation was executed
-    if st.session_state.simulation_results:
-        st.write("")
-        st.markdown("#### 🛡️ Runaway Agent Simulation Outcome")
-        sim_results: List[PaymentResult] = st.session_state.simulation_results
-
-        # Summary Metrics
-        sim_succ = sum(1 for r in sim_results if r.success)
-        sim_block = sum(1 for r in sim_results if not r.success)
-        sim_spent = sum(r.amount for r in sim_results if r.success)
-        sim_saved = sum(r.amount for r in sim_results if not r.success)
-
-        sm1, sm2, sm3, sm4 = st.columns(4)
-        with sm1:
-            st.metric("Total Attempts", len(sim_results))
-        with sm2:
-            st.metric("Allowed Transactions", f"{sim_succ} (${sim_spent:.2f})")
-        with sm3:
-            st.metric("Blocked Attacks", f"{sim_block} (${sim_saved:.2f})")
-        with sm4:
-            st.metric("Final Wallet State", "LOCKED 🔒" if wallet.is_locked else "ACTIVE 🟢")
-
-        # Table Breakdown
-        sim_rows = []
-        for r in sim_results:
-            num = r.attempt_number or "-"
-            if r.success:
-                badge = "🟢 SUCCESS"
-                deducted = f"${r.amount:.2f}"
-            elif config.REASON_RATE_LIMIT_EXCEEDED in r.reason:
-                badge = "🛑 BLOCKED (RATE_LIMIT_EXCEEDED)"
-                deducted = "$0.00"
-            else:
-                badge = "🛑 BLOCKED (WALLET_LOCKED)"
-                deducted = "$0.00"
-
-            sim_rows.append(
-                {
-                    "Attempt #": f"Attempt {num} of {len(sim_results)}",
-                    "Agent ID": r.agent_id or "SafeAgent Buyer Bot v1.0",
-                    "Amount": f"${r.amount:.2f}",
-                    "Status": badge,
-                    "Funds Deducted": deducted,
-                    "Balance After": f"${r.balance:.2f}",
-                    "Security Action / Reason": r.reason,
-                }
-            )
-
-        st.dataframe(sim_rows, width="stretch", hide_index=True)
-
-
-# =============================================================================
-# 7B. VIEW: RUNAWAY AGENT SIMULATOR (DEDICATED COCKPIT)
-# =============================================================================
-
-elif "Runaway Agent Simulator" in nav_selection:
-    st.markdown("## 🚨 Runaway Agent Defense Simulator")
-    st.markdown(
-        "A dedicated security testing cockpit for **CommitCon Hackathon Problem Statement #7: Stripe – Agents That Can Pay**. "
-        "Simulates an adversarial or misbehaving AI agent attempting rapid high-frequency purchases within 60 seconds."
-    )
-
-    # Policy details card
-    st.markdown(
-        """
-        <div style="background: rgba(19, 26, 43, 0.75); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 14px; padding: 20px 24px; margin-bottom: 24px;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 1.5rem;">🛡️</span>
-                <span style="font-size: 1.1rem; font-weight: 700; color: #F8FAFC;">Runaway Agent Protection Policy (Hours 12–14)</span>
-            </div>
-            <div style="font-size: 0.88rem; color: #94A3B8; line-height: 1.6;">
-                1. <b>Rolling 60-Second Window:</b> Strictly monitors transaction attempts within a sliding 60-second window (max 3 permitted).<br>
-                2. <b>Auto-Lock Enforcement:</b> Upon the 4th rapid attempt, the wallet detects runaway behavior, marks the attempt <code>BLOCKED</code> with reason <code>RATE_LIMIT_EXCEEDED</code>, and automatically locks.<br>
-                3. <b>Cascading Defense:</b> Attempts 5–10 are immediately blocked by the locked wallet (<code>WALLET_LOCKED</code>) with <b>$0.00 deducted</b>.<br>
-                4. <b>Audit Trail:</b> Every blocked attempt is permanently cataloged in the transaction ledger with unique Transaction ID, Agent ID, Attempt Number, and exact timestamp.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    sim_btn_col1, sim_btn_col2, sim_btn_col3 = st.columns([2, 1, 1])
-    with sim_btn_col1:
-        st.button(
-            "🚨 Simulate Runaway Agent Attack",
-            on_click=handle_runaway_simulation,
-            type="primary",
-            key="view_sim_attack_btn",
-            width="stretch",
-            help="Initiates 10 rapid payment requests ($4.50 each) from SafeAgent Buyer Bot v1.0",
-        )
-    with sim_btn_col2:
-        st.button(
-            "⏱️ Reset Rate Limiter",
-            on_click=handle_reset_rate_limiter,
-            key="view_sim_reset_rate_btn",
-            width="stretch",
-            help="Clears rolling window timestamps",
-        )
-    with sim_btn_col3:
-        st.button(
-            "🔓 Admin Unlock Wallet",
-            on_click=handle_unlock_wallet,
-            key="view_sim_unlock_btn",
-            width="stretch",
-            help="Unlocks wallet and clears runaway alert",
-        )
-
-    st.write("")
-
-    # Display simulation outcome if executed
-    if st.session_state.simulation_results:
-        sim_results: List[PaymentResult] = st.session_state.simulation_results
-        sim_succ = sum(1 for r in sim_results if r.success)
-        sim_block = sum(1 for r in sim_results if not r.success)
-        sim_spent = sum(r.amount for r in sim_results if r.success)
-        sim_saved = sum(r.amount for r in sim_results if not r.success)
-
-        st.markdown("### 📊 Attack Simulation Telemetry")
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("Total Injected Requests", len(sim_results))
-        with m2:
-            st.metric("Legitimate Allowed", f"{sim_succ} (${sim_spent:.2f})")
-        with m3:
-            st.metric("Blocked Rogue Requests", f"{sim_block} (${sim_saved:.2f})")
-        with m4:
-            st.metric("Funds Preserved", f"${sim_saved:.2f}", delta="Protected from Rogue Agent")
-
-        st.write("")
-        st.markdown("#### 📋 Step-by-Step Security Execution Breakdown")
-        sim_table = []
-        for r in sim_results:
-            num = r.attempt_number or "-"
-            if r.success:
-                badge = "🟢 SUCCESS"
-                deducted = f"${r.amount:.2f}"
-            elif config.REASON_RATE_LIMIT_EXCEEDED in r.reason:
-                badge = "🛑 BLOCKED (RATE_LIMIT_EXCEEDED)"
-                deducted = "$0.00"
-            else:
-                badge = "🛑 BLOCKED (WALLET_LOCKED)"
-                deducted = "$0.00"
-
-            sim_table.append(
-                {
-                    "Attempt #": f"Attempt {num} of {len(sim_results)}",
-                    "Agent ID": r.agent_id or "SafeAgent Buyer Bot v1.0",
-                    "Requested Amount": f"${r.amount:.2f}",
-                    "Status": badge,
-                    "Funds Deducted": deducted,
-                    "Balance After": f"${r.balance:.2f}",
-                    "Security Outcome": r.reason,
-                }
-            )
-
-        st.dataframe(sim_table, width="stretch", hide_index=True)
-
-    # Show Ledger of Blocked Transactions
-    blocked_txs = [tx for tx in wallet.get_transaction_history() if tx.get("status") == config.STATUS_BLOCKED]
-    if blocked_txs:
-        st.write("")
-        st.markdown(f"#### 🛑 Blocked Transactions Audit Log ({len(blocked_txs)} recorded)")
-        b_rows = []
-        for tx in reversed(blocked_txs):
-            b_rows.append(
-                {
-                    "Transaction ID": tx.get("transaction_id", ""),
-                    "Agent ID": tx.get("agent_id", "SafeAgent Buyer Bot v1.0"),
-                    "Attempt #": f"Attempt {tx.get('attempt_number', '-')}",
-                    "Requested Amount": f"${float(tx.get('amount', 0)):.2f}",
-                    "Timestamp": tx.get("timestamp", "")[:19].replace("T", " "),
-                    "Status": "🛑 BLOCKED",
-                    "Block Reason": tx.get("reason", ""),
-                    "Funds Deducted": "$0.00",
-                }
-            )
-        st.dataframe(b_rows, width="stretch", hide_index=True)
-
-
-# =============================================================================
-# 8. VIEW: MARKETPLACE (SECTION C)
-# =============================================================================
-
-elif "Marketplace" in nav_selection:
-    st.markdown("## 🛒 Simulated Marketplace")
-    st.caption("CommitCon initial catalog connected to three independent Seller Agents.")
-
-    m_products = marketplace.get_all_products()
-    m_cols = st.columns(3)
-
-    for idx, prod in enumerate(m_products):
-        seller_obj = sellers.get(prod.seller_id)
-        s_name = seller_obj.name if seller_obj else prod.seller_id
-
-        icon = "🎧" if "Headphones" in prod.name else ("🖱️" if "Mouse" in prod.name else "🔌")
-
-        with m_cols[idx % 3]:
-            if not prod.availability:
-                b_badge = "<span class='badge-outofstock'>Out of Stock</span>"
-            elif prod.price <= config.AUTO_PAYMENT_THRESHOLD:
-                b_badge = "<span class='badge-auto'>⚡ Automatic (&le; $10)</span>"
-            else:
-                b_badge = "<span class='badge-pending'>👤 Approval Required (&gt; $10)</span>"
-
-            st.markdown(
-                f"""
-                <div class="product-box">
-                    <div>
-                        <div class="product-icon">{icon}</div>
-                        {b_badge}
-                        <div class="product-title">{html.escape(prod.name)}</div>
-                        <div class="product-seller">Seller: <b>{html.escape(s_name)}</b></div>
-                        <div class="product-desc">{html.escape(prod.description)}</div>
-                    </div>
-                    <div>
-                        <div class="product-price">${prod.price:.2f}</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            p_col1, p_col2 = st.columns([2, 1])
-            with p_col1:
-                st.button(
-                    f"Buy via Agent",
-                    key=f"mp_buy_{prod.product_id}",
-                    on_click=handle_agent_purchase,
-                    args=(f"Buy {prod.name}",),
-                    width="stretch",
-                    disabled=wallet.is_locked or not prod.availability,
-                )
-            with p_col2:
-                t_label = "Mark OOS" if prod.availability else "Restock"
-                st.button(
-                    t_label,
-                    key=f"mp_oos_{prod.product_id}",
-                    on_click=handle_toggle_availability,
-                    args=(prod.product_id,),
-                    width="stretch",
-                    help="Toggle in-stock status",
-                )
-
-
-# =============================================================================
-# 9. VIEW: TRANSACTION HISTORY (SECTION E)
-# =============================================================================
-
-elif "Transaction History" in nav_selection:
-    st.markdown("## 📋 Transaction History & Security Audit Ledger")
-    st.caption("Live, immutable audit ledger persisted directly to SQLite database (data/safeagent.db) with integer-cent precision.")
-
-    # Gather any active pending requests
-    pending_list = approval_center.get_pending_requests()
-    total_db_count = wallet.db.count_transactions()
-
-    if total_db_count == 0 and not pending_list:
+    all_reqs = approval_center.get_all_requests()
+    historical = [r for r in all_reqs if r.status != "PENDING"]
+    if not historical:
         st.markdown(
             """
             <div class="empty-state-box">
-                <div class="empty-state-icon">📋</div>
-                <div class="empty-state-title">No Audit Transactions Recorded</div>
-                <div class="empty-state-desc">Transactions initiated by the Buyer Agent or approved by humans will be recorded in the SQLite database ledger.</div>
+                <div class="empty-state-title">No Historical Approvals</div>
+                <div class="empty-state-desc">Reviewed transactions will be listed here with decision timestamps.</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
     else:
-        # Filter and Search row
-        f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
-        with f_col1:
-            filter_status = st.selectbox(
-                "Filter by Status",
-                ["All", "SUCCESS", "REJECTED", "BLOCKED", "PENDING", "FAILED"],
-                key="tx_filter_status",
-            )
-        with f_col2:
-            filter_event = st.selectbox(
-                "Filter by Event Type",
-                [
-                    "All",
-                    "PAYMENT_SUCCESS",
-                    "HUMAN_APPROVAL",
-                    "HUMAN_REJECTION",
-                    "PAYMENT_FAILED",
-                    "AUTH_FAILED",
-                    "RUNAWAY_BLOCKED",
-                    "WALLET_LOCKED",
-                ],
-                key="tx_filter_event",
-            )
-        with f_col3:
-            search_query = st.text_input(
-                "Search Ledger",
-                placeholder="Search Transaction ID, Request ID, Agent, Product...",
-                key="tx_search_query",
-            )
+        h_rows = []
+        for r in reversed(historical):
+            h_rows.append({
+                "Request ID": r.request_id,
+                "Product": r.product_name,
+                "Amount": f"${r.amount:.2f}",
+                "Status": r.status,
+                "Decision Reason": r.decision_reason or r.reason,
+                "Decided At": r.decision_timestamp or r.timestamp,
+                "Transaction ID": r.transaction_id or "—",
+            })
+        st.dataframe(h_rows, use_container_width=True, hide_index=True)
 
-        # Query database with filters
-        db_status = None if filter_status in ("All", "PENDING") else filter_status
-        db_event = None if filter_event == "All" else filter_event
-        db_search = search_query.strip() if search_query and search_query.strip() else None
-
-        db_records = wallet.db.get_all_transactions(
-            status=db_status,
-            event_type=db_event,
-            search=db_search,
-            latest_first=True,
-        )
-
-        formatted_rows = []
-
-        # Include pending requests when filter allows
-        if filter_status in ("All", "PENDING") and filter_event in ("All", "HUMAN_APPROVAL"):
-            filtered_pending = pending_list
-            if db_search:
-                q_low = db_search.lower()
-                filtered_pending = [
-                    p for p in pending_list
-                    if q_low in p.request_id.lower()
-                    or q_low in p.buyer_agent.lower()
-                    or q_low in p.product_name.lower()
-                    or q_low in p.order_id.lower()
-                ]
-            for req in filtered_pending:
-                formatted_rows.append(
-                    {
-                        "Transaction ID": req.order_id or req.request_id,
-                        "Request ID": req.request_id,
-                        "Agent ID": f"🤖 {req.buyer_agent}",
-                        "Amount": f"${float(req.amount):.2f}",
-                        "Description": f"{req.product_name} ({req.seller_name})",
-                        "Status": "🟡 PENDING",
-                        "Event Type": "AWAITING_APPROVAL",
-                        "Timestamp": req.timestamp[:19].replace("T", " "),
-                        "Reason": "Awaiting human review in Approval Center",
-                        "Balance After": f"${float(wallet.balance):.2f}",
-                    }
-                )
-
-        if filter_status != "PENDING":
-            for tx in db_records:
-                raw_status = str(tx.get("status", "")).upper()
-                if raw_status == "SUCCESS":
-                    status_badge = "🟢 SUCCESS"
-                elif raw_status == "BLOCKED":
-                    status_badge = "🛑 BLOCKED"
-                elif raw_status == "REJECTED":
-                    status_badge = "🔴 REJECTED"
-                else:
-                    status_badge = "⚠️ FAILED"
-
-                evt = tx.get("event_type") or "PAYMENT_EVENT"
-                if evt == "PAYMENT_SUCCESS":
-                    evt_badge = "✅ PAYMENT_SUCCESS"
-                elif evt == "HUMAN_APPROVAL":
-                    evt_badge = "🛡️ HUMAN_APPROVAL"
-                elif evt == "HUMAN_REJECTION":
-                    evt_badge = "🛑 HUMAN_REJECTION"
-                elif evt == "RUNAWAY_BLOCKED":
-                    evt_badge = "🚨 RUNAWAY_BLOCKED"
-                elif evt == "WALLET_LOCKED":
-                    evt_badge = "🔒 WALLET_LOCKED"
-                elif evt == "AUTH_FAILED":
-                    evt_badge = "⛔ AUTH_FAILED"
-                else:
-                    evt_badge = f"⚠️ {evt}"
-
-                attempt_str = f" (#{tx.get('attempt_number')})" if tx.get("attempt_number") else ""
-                agent_str = f"🤖 {tx.get('agent_id')}{attempt_str}" if tx.get("agent_id") else "🤖 Buyer Agent"
-
-                formatted_rows.append(
-                    {
-                        "Transaction ID": tx.get("transaction_id", ""),
-                        "Request ID": tx.get("request_id") or "—",
-                        "Agent ID": agent_str,
-                        "Amount": f"${float(tx.get('amount', 0)):.2f}",
-                        "Description": tx.get("description", "") or tx.get("recipient", ""),
-                        "Status": status_badge,
-                        "Event Type": evt_badge,
-                        "Timestamp": tx.get("timestamp", "")[:19].replace("T", " "),
-                        "Reason": tx.get("reason", ""),
-                        "Balance After": f"${float(tx.get('balance_after', 0)):.2f}",
-                    }
-                )
-
-        # Metrics bar
-        st.markdown(
-            f"""
-            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 15px; font-size: 0.9rem; color: #94A3B8;">
-                <span>Total DB Records: <b style="color: #60A5FA;">{total_db_count}</b></span>
-                <span>Showing: <b style="color: #E2E8F0;">{len(formatted_rows)}</b></span>
-                <span>Database File: <code style="color: #A78BFA; background: #1E293B; padding: 2px 6px; border-radius: 4px;">data/safeagent.db</code></span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if not formatted_rows:
-            st.info(f"No transactions found matching filter criteria (Status: '{filter_status}', Event: '{filter_event}').")
-        else:
-            st.dataframe(
-                formatted_rows,
-                width="stretch",
-                hide_index=True,
-            )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# 10. VIEW: SECURITY SETTINGS & RULES (SECTION F)
+# PAGE 5: SECURITY CENTER
 # =============================================================================
 
-elif "Security Settings" in nav_selection:
-    st.markdown("## ⚙️ Security Rules & Policies")
-    st.caption("Live security configuration loaded directly from config.py and SafeAgentWallet.")
+elif current_page == "Security Center":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Security Center</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Real-time threat monitoring, rate limit sliding window, and runaway agent defenses.</p>", unsafe_allow_html=True)
+    render_notice()
 
-    rule_c1, rule_c2 = st.columns(2)
-    with rule_c1:
+    # Security Metrics Row
+    s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+    with s_col1:
+        lock_status_text = "LOCKED" if wallet.is_locked else "ACTIVE"
+        lock_status_cls = "status-pill-danger" if wallet.is_locked else "status-pill-success"
         st.markdown(
             f"""
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">1. Initial Virtual Balance:</b><br>
-                <code>${config.INITIAL_BALANCE:.2f}</code> starting virtual funds in wallet.
-            </div>
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">2. Lifetime Spending Limit:</b><br>
-                <code>${config.LIFETIME_SPENDING_LIMIT:.2f}</code> maximum cumulative spending allowance across all transactions.
-            </div>
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">3. Automatic Payment Threshold:</b><br>
-                Payments up to and including <code>${config.AUTO_PAYMENT_THRESHOLD:.2f}</code> execute automatically without approval.
+            <div class="metric-box">
+                <div class="metric-box-label">Wallet Lock State</div>
+                <div class="metric-box-value"><span class="status-pill {lock_status_cls}">{lock_status_text}</span></div>
+                <div class="metric-box-sub">Lock status invariant</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    with rule_c2:
+    with s_col2:
+        req_count_now = wallet._rate_limiter.get_request_count()
         st.markdown(
             f"""
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">4. Human Approval Requirement:</b><br>
-                Payments strictly above <code>${config.AUTO_PAYMENT_THRESHOLD:.2f}</code> require explicit human review and authorization.
+            <div class="metric-box">
+                <div class="metric-box-label">Rolling 60s Rate Limiter</div>
+                <div class="metric-box-value">{req_count_now} / {config.RATE_LIMIT_MAX_REQUESTS}</div>
+                <div class="metric-box-sub">Max allowed in 60s window</div>
             </div>
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">5. Rate Limiting Protection:</b><br>
-                Maximum <code>{config.RATE_LIMIT_MAX_REQUESTS} requests per rolling {int(config.RATE_LIMIT_WINDOW_SECONDS)} seconds</code> (rejected requests count too).
+            """,
+            unsafe_allow_html=True,
+        )
+    with s_col3:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Failed Auth Counter</div>
+                <div class="metric-box-value">{wallet.invalid_auth_attempts} / {config.MAX_INVALID_AUTH_ATTEMPTS}</div>
+                <div class="metric-box-sub">Locks after 3 failed strikes</div>
             </div>
-            <div style="background: #141A24; border-left: 3px solid #3B82F6; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #60A5FA;">6. Anti-Tamper Lockout:</b><br>
-                Wallet automatically locks after <code>{config.MAX_INVALID_AUTH_ATTEMPTS} invalid authorization attempts</code>.
-            </div>
-            <div style="background: #141A24; border-left: 3px solid #EF4444; padding: 14px 16px; border-radius: 0 8px 8px 0; margin-bottom: 12px;">
-                <b style="color: #F87171;">7. Runaway Agent Lockdown (Hour 12–14):</b><br>
-                Sequence of 10 rapid attempts from rogue agent auto-locks wallet on Attempt 4 (<code>{config.REASON_RATE_LIMIT_EXCEEDED}</code>) and blocks subsequent attempts 5–10 (<code>{config.REASON_WALLET_LOCKED}</code>) with $0 deducted.
+            """,
+            unsafe_allow_html=True,
+        )
+    with s_col4:
+        st.markdown(
+            f"""
+            <div class="metric-box">
+                <div class="metric-box-label">Blocked Attempts</div>
+                <div class="metric-box-value">{wallet.blocked_attempts_count}</div>
+                <div class="metric-box-sub">Unauthorized transactions thwarted</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    st.write("")
-    st.markdown("#### 🧪 Manual Security Injection Tester")
-    st.caption("Inject custom transaction payloads to test boundaries directly against the wallet:")
+    # Runaway Agent Active Alert
+    if wallet.runaway_alert:
+        ra = wallet.runaway_alert
+        st.markdown(
+            f"""
+            <div class="notice-banner-danger" style="margin-top: 10px;">
+                <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px;">Runaway Agent Detected: Autonomous Lockout Engaged</div>
+                <div>{html.escape(ra.get('message', 'AI agent exceeded permitted transaction rate.'))}</div>
+                <div style="margin-top: 8px; font-size: 0.8rem; color: #7F1D1D;">
+                    <b>Agent ID:</b> <code>{html.escape(ra.get('agent_id', 'Unknown'))}</code> | 
+                    <b>Breach Timestamp:</b> {ra.get('lock_timestamp', '')} | 
+                    <b>Protection:</b> 100% of subsequent attempts blocked ($0 deducted).
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    t_col1, t_col2 = st.columns(2)
-    with t_col1:
-        inj_recip = st.text_input("Recipient", value="Test Merchant", key="inj_rec")
-        inj_amt_str = st.text_input("Amount ($)", value="15.00", key="inj_amt")
-    with t_col2:
-        inj_appr = st.selectbox("Human Approval Flag", ["None", "Approved (True)", "Rejected (False)"], key="inj_app")
-        inj_tok = st.text_input("Token", value=config.DEFAULT_AUTH_TOKEN, key="inj_tk")
+    # Runaway Agent Attack Simulation Harness
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Runaway Agent Attack Simulator</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Controlled security boundary stress test</span>
+            </div>
+            <p style="font-size: 0.82rem; color: #475569; margin-bottom: 14px;">
+                Simulates an AI buyer agent falling into an uncontrolled infinite loop attempting 10 rapid purchases. 
+                Attempts 1–3 are evaluated under normal financial limits; Attempt 4 triggers the rolling 60-second rate limiter breach and auto-locks the wallet; 
+                Attempts 5–10 are blocked by the locked wallet. Zero unauthorized funds are deducted.
+            </p>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if st.button("Inject Payment Directly to Wallet", width="stretch"):
-        try:
-            amt = Decimal(inj_amt_str.strip())
-            appr_flag = True if "Approved" in inj_appr else (False if "Rejected" in inj_appr else None)
-            res = wallet.execute_payment(
-                amount=amt,
-                recipient=inj_recip,
-                human_approved=appr_flag,
-                auth_token=inj_tok if appr_flag else None,
-            )
-            if res.success:
-                st.success(f"Payment Succeeded! TxID: {res.transaction_id} | Balance: ${res.balance:.2f}")
-            else:
-                st.error(f"Payment Rejected: {res.reason}")
-        except Exception as e:
-            st.error(f"Error executing injection: {e}")
+    if st.button("Trigger 10-Attempt Runaway Agent Attack Simulation", type="primary"):
+        handle_runaway_sim()
+        st.rerun()
+
+    if st.session_state.simulation_results:
+        sim_res = st.session_state.simulation_results
+        sim_rows = []
+        for idx, r in enumerate(sim_res):
+            st_text = "ALLOWED" if r.success else "BLOCKED"
+            sim_rows.append({
+                "Attempt": f"#{idx + 1} of 10",
+                "Transaction ID": r.transaction_id,
+                "Amount": f"${r.amount:.2f}",
+                "Status": st_text,
+                "Security Result": r.reason,
+                "Wallet Balance After": f"${r.balance:.2f}",
+            })
+        st.write("")
+        st.dataframe(sim_rows, use_container_width=True, hide_index=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Blocked Security Events Ledger
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Blocked Security Events History</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">SQLite-backed threat defense records</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    blocked_txs = wallet.db.get_blocked_transactions()
+    if not blocked_txs:
+        st.markdown(
+            """
+            <div class="empty-state-box">
+                <div class="empty-state-title">No Blocked Events Recorded</div>
+                <div class="empty-state-desc">Transactions rejected by rate limits or locked wallet checks will be recorded here.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        b_rows = []
+        for t in reversed(blocked_txs):
+            b_rows.append({
+                "Transaction ID": t.get("transaction_id", ""),
+                "Agent": t.get("agent_id", "Buyer Agent"),
+                "Amount": f"${float(t.get('amount', 0)):.2f}",
+                "Status": t.get("status", ""),
+                "Event Type": t.get("event_type", ""),
+                "Reason": t.get("reason", ""),
+                "Timestamp": str(t.get("timestamp", ""))[:19].replace("T", " "),
+            })
+        st.dataframe(b_rows, use_container_width=True, hide_index=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 6: TRANSACTIONS
+# =============================================================================
+
+elif current_page == "Transactions":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Transactions</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Operational transaction records and settlement outcomes.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    st.markdown(
+        """
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>Transaction History</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Search and filter ledger</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    t_fcol1, t_fcol2 = st.columns([1, 2])
+    with t_fcol1:
+        tx_filter_status = st.selectbox(
+            "Filter by Status",
+            ["All", "SUCCESS", "REJECTED", "BLOCKED"],
+            key="tx_page_status_filter",
+        )
+    with t_fcol2:
+        tx_search_query = st.text_input(
+            "Search Transactions",
+            placeholder="Search Transaction ID, Description, or Agent ID...",
+            key="tx_page_search_input",
+        )
+
+    db_st = None if tx_filter_status == "All" else tx_filter_status
+    db_sq = tx_search_query.strip() if tx_search_query and tx_search_query.strip() else None
+
+    records = wallet.db.get_all_transactions(
+        status=db_st,
+        search=db_sq,
+        latest_first=True,
+    )
+
+    if not records:
+        st.markdown(
+            f"""
+            <div class="empty-state-box">
+                <div class="empty-state-title">No Transactions Found</div>
+                <div class="empty-state-desc">No transactions matched status '{tx_filter_status}' and search criteria.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        table_rows = []
+        for t in records:
+            table_rows.append({
+                "Transaction ID": t.get("transaction_id", ""),
+                "Agent ID": t.get("agent_id") or "Buyer Agent",
+                "Merchant / Description": t.get("description", ""),
+                "Amount": f"${float(t.get('amount', 0)):.2f}",
+                "Status": t.get("status", ""),
+                "Timestamp": str(t.get("timestamp", ""))[:19].replace("T", " "),
+                "Balance After": f"${float(t.get('balance_after', 0)):.2f}",
+                "Outcome Reason": t.get("reason", ""),
+            })
+        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 7: AUDIT LOGS
+# =============================================================================
+
+elif current_page == "Audit Logs":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Audit Logs</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Immutable, database-backed security ledger with integer-cent monetary precision.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    total_audit_count = wallet.db.count_transactions()
+
+    st.markdown(
+        f"""
+        <div class="fintech-card">
+            <div class="fintech-card-header">
+                <span>SQLite Event Ledger</span>
+                <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Total Records: <b>{total_audit_count}</b> | Storage: <code>data/safeagent.db</code></span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    al_c1, al_c2, al_c3 = st.columns([1, 1, 2])
+    with al_c1:
+        audit_filter_event = st.selectbox(
+            "Filter by Event Type",
+            [
+                "All",
+                "PAYMENT_SUCCESS",
+                "HUMAN_APPROVAL",
+                "HUMAN_REJECTION",
+                "PAYMENT_FAILED",
+                "AUTH_FAILED",
+                "RUNAWAY_BLOCKED",
+                "WALLET_LOCKED",
+            ],
+            key="audit_filter_event",
+        )
+    with al_c2:
+        audit_filter_status = st.selectbox(
+            "Filter by Status",
+            ["All", "SUCCESS", "REJECTED", "BLOCKED"],
+            key="audit_filter_status",
+        )
+    with al_c3:
+        audit_search = st.text_input(
+            "Search Audit Records",
+            placeholder="Search Transaction ID, Request ID, Agent, or Description...",
+            key="audit_search_input",
+        )
+
+    evt_param = None if audit_filter_event == "All" else audit_filter_event
+    st_param = None if audit_filter_status == "All" else audit_filter_status
+    search_param = audit_search.strip() if audit_search and audit_search.strip() else None
+
+    audit_records = wallet.db.get_all_transactions(
+        status=st_param,
+        event_type=evt_param,
+        search=search_param,
+        latest_first=True,
+    )
+
+    if not audit_records:
+        st.markdown(
+            """
+            <div class="empty-state-box">
+                <div class="empty-state-title">No Audit Records Found</div>
+                <div class="empty-state-desc">No events matched the selected filter parameters.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        audit_table = []
+        for a in audit_records:
+            audit_table.append({
+                "Event Type": a.get("event_type", ""),
+                "Transaction ID": a.get("transaction_id", ""),
+                "Request ID": a.get("request_id") or "—",
+                "Agent": a.get("agent_id") or "Buyer Agent",
+                "Amount ($)": f"${float(a.get('amount', 0)):.2f}",
+                "Amount (Cents)": a.get("amount_cents", 0),
+                "Status": a.get("status", ""),
+                "Balance After ($)": f"${float(a.get('balance_after', 0)):.2f}",
+                "Reason": a.get("reason", ""),
+                "Timestamp": str(a.get("timestamp", ""))[:19].replace("T", " "),
+            })
+        st.dataframe(audit_table, use_container_width=True, hide_index=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# PAGE 8: SETTINGS
+# =============================================================================
+
+elif current_page == "Settings":
+    st.markdown("<h2 style='font-size: 1.5rem; font-weight: 700; color: #0F172A; margin-bottom: 2px;'>Settings & System Configuration</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #64748B; margin-bottom: 20px;'>Operational parameters, financial bounds, and system metadata.</p>", unsafe_allow_html=True)
+    render_notice()
+
+    s_col1, s_col2 = st.columns(2)
+
+    with s_col1:
+        st.markdown(
+            f"""
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Financial Policy Configuration</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Core wallet bounds</span>
+                </div>
+                <div style="font-size: 0.85rem; line-height: 2;">
+                    <div><b>Initial Virtual Balance:</b> <code>${config.INITIAL_BALANCE:.2f}</code></div>
+                    <div><b>Lifetime Cumulative Spending Limit:</b> <code>${config.LIFETIME_SPENDING_LIMIT:.2f}</code></div>
+                    <div><b>Automatic Payment Threshold:</b> <code>${config.AUTO_PAYMENT_THRESHOLD:.2f}</code> (Inclusive)</div>
+                    <div><b>Human Approval Policy:</b> Mandatory for any transaction strictly &gt; ${config.AUTO_PAYMENT_THRESHOLD:.2f}</div>
+                    <div><b>Overdraft Invariant:</b> Balance strictly bounded at &ge; $0.00</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"""
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Database & Persistence Health</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Storage telemetry</span>
+                </div>
+                <div style="font-size: 0.85rem; line-height: 2;">
+                    <div><b>Primary Database:</b> <code>data/safeagent.db</code></div>
+                    <div><b>Database Engine:</b> SQLite3 (WAL Mode + Thread-safe RLock)</div>
+                    <div><b>Monetary Storage:</b> Stored in integer cents (e.g. $4.50 &rarr; 450 cents)</div>
+                    <div><b>Active Schema:</b> <code>transactions</code> (12 typed columns)</div>
+                    <div><b>Database Indexes:</b> 5 performance indexes active</div>
+                    <div><b>Total Persisted Events:</b> <code>{wallet.db.count_transactions()}</code></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with s_col2:
+        st.markdown(
+            f"""
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Security & Anti-Tamper Configuration</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">Defense rules</span>
+                </div>
+                <div style="font-size: 0.85rem; line-height: 2;">
+                    <div><b>Rate Limiter Window:</b> <code>{int(config.RATE_LIMIT_WINDOW_SECONDS)} seconds</code></div>
+                    <div><b>Max Requests per Window:</b> <code>{config.RATE_LIMIT_MAX_REQUESTS} payment attempts</code></div>
+                    <div><b>Rogue Loop Policy:</b> Lock wallet immediately on 4th attempt in window</div>
+                    <div><b>Anti-Tamper Lockout:</b> Locks after <code>{config.MAX_INVALID_AUTH_ATTEMPTS} invalid credential strikes</code></div>
+                    <div><b>Rejection Policy:</b> Normal human rejections never count toward strikes</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="fintech-card">
+                <div class="fintech-card-header">
+                    <span>Application & Hackathon Metadata</span>
+                    <span style="font-size: 0.78rem; font-weight: normal; color: #64748B;">System specifications</span>
+                </div>
+                <div style="font-size: 0.85rem; line-height: 2;">
+                    <div><b>Application Name:</b> SafeAgent Wallet</div>
+                    <div><b>Version:</b> 2.0 (Multi-Page Fintech Architecture)</div>
+                    <div><b>Hackathon:</b> CommitCon 24-Hour Hackathon</div>
+                    <div><b>Challenge:</b> Stripe – Agents That Can Pay (Problem Statement #7)</div>
+                    <div><b>Lead Developer:</b> Abhyjoit Singh (<a href="https://github.com/Abhyjoit/SafeAgent-Wallet" target="_blank">@Abhyjoit</a>)</div>
+                    <div><b>License:</b> MIT Open Source (2026)</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
