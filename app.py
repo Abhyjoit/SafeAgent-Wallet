@@ -1230,91 +1230,156 @@ elif "Marketplace" in nav_selection:
 
 elif "Transaction History" in nav_selection:
     st.markdown("## 📋 Transaction History & Security Audit Ledger")
-    st.caption("Live, immutable audit ledger persisted directly to data/transactions.json.")
-
-    history = wallet.get_transaction_history()
+    st.caption("Live, immutable audit ledger persisted directly to SQLite database (data/safeagent.db) with integer-cent precision.")
 
     # Gather any active pending requests
     pending_list = approval_center.get_pending_requests()
+    total_db_count = wallet.db.count_transactions()
 
-    if not history and not pending_list:
+    if total_db_count == 0 and not pending_list:
         st.markdown(
             """
             <div class="empty-state-box">
                 <div class="empty-state-icon">📋</div>
-                <div class="empty-state-title">No Transactions Recorded</div>
-                <div class="empty-state-desc">Transactions initiated by the Buyer Agent or approved by humans will be recorded here.</div>
+                <div class="empty-state-title">No Audit Transactions Recorded</div>
+                <div class="empty-state-desc">Transactions initiated by the Buyer Agent or approved by humans will be recorded in the SQLite database ledger.</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
     else:
-        # Filter options
-        f_col1, f_col2 = st.columns([1, 3])
+        # Filter and Search row
+        f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
         with f_col1:
             filter_status = st.selectbox(
-                "Filter Status",
-                ["All", "APPROVED", "REJECTED", "BLOCKED", "PENDING", "FAILED"],
-                key="tx_filter",
+                "Filter by Status",
+                ["All", "SUCCESS", "REJECTED", "BLOCKED", "PENDING", "FAILED"],
+                key="tx_filter_status",
             )
+        with f_col2:
+            filter_event = st.selectbox(
+                "Filter by Event Type",
+                [
+                    "All",
+                    "PAYMENT_SUCCESS",
+                    "HUMAN_APPROVAL",
+                    "HUMAN_REJECTION",
+                    "PAYMENT_FAILED",
+                    "AUTH_FAILED",
+                    "RUNAWAY_BLOCKED",
+                    "WALLET_LOCKED",
+                ],
+                key="tx_filter_event",
+            )
+        with f_col3:
+            search_query = st.text_input(
+                "Search Ledger",
+                placeholder="Search Transaction ID, Request ID, Agent, Product...",
+                key="tx_search_query",
+            )
+
+        # Query database with filters
+        db_status = None if filter_status in ("All", "PENDING") else filter_status
+        db_event = None if filter_event == "All" else filter_event
+        db_search = search_query.strip() if search_query and search_query.strip() else None
+
+        db_records = wallet.db.get_all_transactions(
+            status=db_status,
+            event_type=db_event,
+            search=db_search,
+            latest_first=True,
+        )
 
         formatted_rows = []
 
-        # Include pending requests first when filter allows
-        if filter_status in ("All", "PENDING"):
-            for req in pending_list:
+        # Include pending requests when filter allows
+        if filter_status in ("All", "PENDING") and filter_event in ("All", "HUMAN_APPROVAL"):
+            filtered_pending = pending_list
+            if db_search:
+                q_low = db_search.lower()
+                filtered_pending = [
+                    p for p in pending_list
+                    if q_low in p.request_id.lower()
+                    or q_low in p.buyer_agent.lower()
+                    or q_low in p.product_name.lower()
+                    or q_low in p.order_id.lower()
+                ]
+            for req in filtered_pending:
                 formatted_rows.append(
                     {
                         "Transaction ID": req.order_id or req.request_id,
-                        "Initiator / Agent": f"🤖 {req.buyer_agent}",
-                        "Product": f"{req.product_name} ({req.seller_name})",
+                        "Request ID": req.request_id,
+                        "Agent ID": f"🤖 {req.buyer_agent}",
                         "Amount": f"${float(req.amount):.2f}",
-                        "Date and time": req.timestamp[:19],
+                        "Description": f"{req.product_name} ({req.seller_name})",
                         "Status": "🟡 PENDING",
-                        "Approval/rejection outcome": "Awaiting human authorization in Approval Center",
+                        "Event Type": "AWAITING_APPROVAL",
+                        "Timestamp": req.timestamp[:19].replace("T", " "),
+                        "Reason": "Awaiting human review in Approval Center",
                         "Balance After": f"${float(wallet.balance):.2f}",
                     }
                 )
 
-        for tx in reversed(history):
-            raw_status = tx.get("status", "")
-            is_success = raw_status == config.STATUS_SUCCESS
-            reason_lower = tx.get("reason", "").lower()
+        if filter_status != "PENDING":
+            for tx in db_records:
+                raw_status = str(tx.get("status", "")).upper()
+                if raw_status == "SUCCESS":
+                    status_badge = "🟢 SUCCESS"
+                elif raw_status == "BLOCKED":
+                    status_badge = "🛑 BLOCKED"
+                elif raw_status == "REJECTED":
+                    status_badge = "🔴 REJECTED"
+                else:
+                    status_badge = "⚠️ FAILED"
 
-            if is_success:
-                status_cat = "APPROVED"
-                status_badge = "🟢 APPROVED"
-            elif raw_status == config.STATUS_BLOCKED:
-                status_cat = "BLOCKED"
-                status_badge = "🛑 BLOCKED"
-            elif "declined" in reason_lower or "human reviewer" in reason_lower or "rejected by human" in reason_lower:
-                status_cat = "REJECTED"
-                status_badge = "🔴 REJECTED"
-            else:
-                status_cat = "FAILED"
-                status_badge = "⚠️ FAILED"
+                evt = tx.get("event_type") or "PAYMENT_EVENT"
+                if evt == "PAYMENT_SUCCESS":
+                    evt_badge = "✅ PAYMENT_SUCCESS"
+                elif evt == "HUMAN_APPROVAL":
+                    evt_badge = "🛡️ HUMAN_APPROVAL"
+                elif evt == "HUMAN_REJECTION":
+                    evt_badge = "🛑 HUMAN_REJECTION"
+                elif evt == "RUNAWAY_BLOCKED":
+                    evt_badge = "🚨 RUNAWAY_BLOCKED"
+                elif evt == "WALLET_LOCKED":
+                    evt_badge = "🔒 WALLET_LOCKED"
+                elif evt == "AUTH_FAILED":
+                    evt_badge = "⛔ AUTH_FAILED"
+                else:
+                    evt_badge = f"⚠️ {evt}"
 
-            if filter_status != "All" and filter_status != status_cat:
-                continue
+                attempt_str = f" (#{tx.get('attempt_number')})" if tx.get("attempt_number") else ""
+                agent_str = f"🤖 {tx.get('agent_id')}{attempt_str}" if tx.get("agent_id") else "🤖 Buyer Agent"
 
-            attempt_str = f" (#{tx.get('attempt_number')})" if tx.get("attempt_number") else ""
-            agent_str = f"🤖 {tx.get('agent_id')}{attempt_str}" if tx.get("agent_id") else "🤖 Buyer Agent"
+                formatted_rows.append(
+                    {
+                        "Transaction ID": tx.get("transaction_id", ""),
+                        "Request ID": tx.get("request_id") or "—",
+                        "Agent ID": agent_str,
+                        "Amount": f"${float(tx.get('amount', 0)):.2f}",
+                        "Description": tx.get("description", "") or tx.get("recipient", ""),
+                        "Status": status_badge,
+                        "Event Type": evt_badge,
+                        "Timestamp": tx.get("timestamp", "")[:19].replace("T", " "),
+                        "Reason": tx.get("reason", ""),
+                        "Balance After": f"${float(tx.get('balance_after', 0)):.2f}",
+                    }
+                )
 
-            formatted_rows.append(
-                {
-                    "Transaction ID": tx.get("transaction_id", ""),
-                    "Initiator / Agent": agent_str,
-                    "Product": tx.get("recipient", ""),
-                    "Amount": f"${float(tx.get('amount', 0)):.2f}",
-                    "Date and time": tx.get("timestamp", "")[:19].replace("T", " "),
-                    "Status": status_badge,
-                    "Approval/rejection outcome": tx.get("reason", ""),
-                    "Balance After": f"${float(tx.get('balance_after', 0)):.2f}",
-                }
-            )
+        # Metrics bar
+        st.markdown(
+            f"""
+            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 15px; font-size: 0.9rem; color: #94A3B8;">
+                <span>Total DB Records: <b style="color: #60A5FA;">{total_db_count}</b></span>
+                <span>Showing: <b style="color: #E2E8F0;">{len(formatted_rows)}</b></span>
+                <span>Database File: <code style="color: #A78BFA; background: #1E293B; padding: 2px 6px; border-radius: 4px;">data/safeagent.db</code></span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         if not formatted_rows:
-            st.info(f"No transactions found matching filter '{filter_status}'.")
+            st.info(f"No transactions found matching filter criteria (Status: '{filter_status}', Event: '{filter_event}').")
         else:
             st.dataframe(
                 formatted_rows,

@@ -1,7 +1,7 @@
 [
   {
-    "transaction_id": "tx_c04f580c7ad8",
-    "timestamp": "2026-11-03T23:51:44.912386+00:00",
+    "transaction_id": "tx_f05706723357",
+    "timestamp": "2026-11-04T00:11:39.069812+00:00",
     "amount": "15.00",
     "recipient": "V",
     "status": "REJECTED",
@@ -11,11 +11,17 @@
     "requires_human_approval": true,
     "human_approved": true,
     "agent_id": null,
-    "attempt_number": null
+    "attempt_number": null,
+    "request_id": null,
+    "event_type": "AUTH_FAILED",
+    "description": "V",
+    "amount_cents": 1500,
+    "balance_after_cents": 10000,
+    "lifetime_spent_cents": 0
   },
   {
-    "transaction_id": "tx_b96804d0a690",
-    "timestamp": "2026-11-03T23:51:44.912544+00:00",
+    "transaction_id": "tx_6bd06d0deec5",
+    "timestamp": "2026-11-04T00:11:39.070448+00:00",
     "amount": "15.00",
     "recipient": "V",
     "status": "REJECTED",
@@ -25,11 +31,17 @@
     "requires_human_approval": true,
     "human_approved": true,
     "agent_id": null,
-    "attempt_number": null
+    "attempt_number": null,
+    "request_id": null,
+    "event_type": "AUTH_FAILED",
+    "description": "V",
+    "amount_cents": 1500,
+    "balance_after_cents": 10000,
+    "lifetime_spent_cents": 0
   },
   {
-    "transaction_id": "tx_1084c5ceda79",
-    "timestamp": "2026-11-03T23:51:44.912682+00:00",
+    "transaction_id": "tx_2735aa062916",
+    "timestamp": "2026-11-04T00:11:39.071145+00:00",
     "amount": "15.00",
     "recipient": "V",
     "status": "REJECTED",
@@ -39,6 +51,12 @@
     "requires_human_approval": true,
     "human_approved": true,
     "agent_id": null,
-    "attempt_number": null
+    "attempt_number": null,
+    "request_id": null,
+    "event_type": "AUTH_FAILED",
+    "description": "V",
+    "amount_cents": 1500,
+    "balance_after_cents": 10000,
+    "lifetime_spent_cents": 0
   }
 ]

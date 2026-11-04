@@ -25,7 +25,15 @@ import uuid
 
 from config import (
     AUTO_PAYMENT_THRESHOLD,
+    DATABASE_FILE,
     DEFAULT_AUTH_TOKEN,
+    EVENT_AUTH_FAILED,
+    EVENT_HUMAN_APPROVAL,
+    EVENT_HUMAN_REJECTION,
+    EVENT_PAYMENT_FAILED,
+    EVENT_PAYMENT_SUCCESS,
+    EVENT_RUNAWAY_BLOCKED,
+    EVENT_WALLET_LOCKED,
     INITIAL_BALANCE,
     LIFETIME_SPENDING_LIMIT,
     REASON_RATE_LIMIT_EXCEEDED,
@@ -35,6 +43,7 @@ from config import (
     STATUS_SUCCESS,
     TRANSACTIONS_FILE,
 )
+from database import DatabaseManager
 from security import AuthorizationGuard, RateLimiter, validate_amount
 from transactions import Transaction, TransactionManager
 
@@ -57,6 +66,8 @@ class PaymentResult:
     timestamp: str
     agent_id: Optional[str] = None
     attempt_number: Optional[int] = None
+    request_id: Optional[str] = None
+    event_type: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to a dictionary."""
@@ -75,6 +86,8 @@ class PaymentResult:
             "timestamp": self.timestamp,
             "agent_id": self.agent_id,
             "attempt_number": self.attempt_number,
+            "request_id": self.request_id,
+            "event_type": self.event_type,
         }
 
     def __getitem__(self, item: str) -> Any:
@@ -103,6 +116,7 @@ class SafeAgentWallet:
         transactions_file: Path = TRANSACTIONS_FILE,
         auth_token: str = DEFAULT_AUTH_TOKEN,
         load_existing: bool = True,
+        db_path: Optional[Path] = None,
     ):
         self._initial_balance = Decimal(str(initial_balance))
         self._spending_limit = Decimal(str(spending_limit))
@@ -112,7 +126,7 @@ class SafeAgentWallet:
         self._lock = threading.RLock()
         self._rate_limiter = RateLimiter()
         self._auth_guard = AuthorizationGuard(expected_token=auth_token)
-        self._transaction_manager = TransactionManager(file_path=transactions_file)
+        self._transaction_manager = TransactionManager(file_path=transactions_file, db_path=db_path)
 
         # State tracking
         self._total_spent = Decimal("0.00")
@@ -200,6 +214,26 @@ class SafeAgentWallet:
         with self._lock:
             return self._blocked_attempts_count
 
+    @property
+    def db(self) -> DatabaseManager:
+        """Direct access to the SQLite DatabaseManager."""
+        return self._transaction_manager.db
+
+    def get_all_audit_events(
+        self,
+        status: Optional[str] = None,
+        event_type: Optional[str] = None,
+        search: Optional[str] = None,
+        latest_first: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Queries database audit records directly with filtering and search."""
+        return self._transaction_manager.db.get_all_transactions(
+            status=status,
+            event_type=event_type,
+            search=search,
+            latest_first=latest_first,
+        )
+
     def _generate_tx_id(self) -> str:
         """Generates a unique transaction identifier."""
         return f"tx_{uuid.uuid4().hex[:12]}"
@@ -216,6 +250,8 @@ class SafeAgentWallet:
         timestamp: str,
         agent_id: Optional[str] = None,
         attempt_number: Optional[int] = None,
+        request_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> PaymentResult:
         """Helper to create Transaction record and return PaymentResult."""
         tx = Transaction(
@@ -231,6 +267,8 @@ class SafeAgentWallet:
             human_approved=human_approved,
             agent_id=agent_id,
             attempt_number=attempt_number,
+            request_id=request_id,
+            event_type=event_type,
         )
         self._transaction_manager.record_transaction(tx)
 
@@ -249,6 +287,8 @@ class SafeAgentWallet:
             timestamp=timestamp,
             agent_id=agent_id,
             attempt_number=attempt_number,
+            request_id=request_id,
+            event_type=event_type,
         )
 
     def execute_payment(
@@ -262,6 +302,8 @@ class SafeAgentWallet:
         attempt_number: Optional[int] = None,
         current_time: Optional[float] = None,
         is_agent_attempt: bool = True,
+        request_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> PaymentResult:
         """
         Executes a payment request with full security validation.
@@ -305,6 +347,7 @@ class SafeAgentWallet:
                 else:
                     reason_msg = f"{REASON_WALLET_LOCKED}: {lock_desc} All payments are halted."
 
+                evt = event_type or EVENT_RUNAWAY_BLOCKED
                 if is_agent_attempt:
                     self._rate_limiter.record_attempt(current_time)
                     self._blocked_attempts_count += 1
@@ -319,6 +362,8 @@ class SafeAgentWallet:
                         timestamp=now_iso,
                         agent_id=agent_id,
                         attempt_number=attempt_number,
+                        request_id=request_id,
+                        event_type=evt,
                     )
                 else:
                     return self._record_result(
@@ -332,6 +377,8 @@ class SafeAgentWallet:
                         timestamp=now_iso,
                         agent_id=agent_id,
                         attempt_number=attempt_number,
+                        request_id=request_id,
+                        event_type=evt,
                     )
 
             # -------------------------------------------------------------
@@ -360,6 +407,7 @@ class SafeAgentWallet:
                 }
 
                 status = STATUS_BLOCKED if is_agent_attempt else STATUS_REJECTED
+                evt = event_type or EVENT_RUNAWAY_BLOCKED
                 return self._record_result(
                     tx_id=tx_id,
                     amount=req_amount,
@@ -371,6 +419,8 @@ class SafeAgentWallet:
                     timestamp=now_iso,
                     agent_id=agent_id,
                     attempt_number=attempt_number,
+                    request_id=request_id,
+                    event_type=evt,
                 )
 
             # -------------------------------------------------------------
@@ -392,6 +442,8 @@ class SafeAgentWallet:
                     timestamp=now_iso,
                     agent_id=agent_id,
                     attempt_number=attempt_number,
+                    request_id=request_id,
+                    event_type=EVENT_PAYMENT_FAILED,
                 )
 
             # -------------------------------------------------------------
@@ -410,6 +462,8 @@ class SafeAgentWallet:
                     timestamp=now_iso,
                     agent_id=agent_id,
                     attempt_number=attempt_number,
+                    request_id=request_id,
+                    event_type=event_type or EVENT_PAYMENT_FAILED,
                 )
 
             # -------------------------------------------------------------
@@ -436,6 +490,8 @@ class SafeAgentWallet:
                         timestamp=now_iso,
                         agent_id=agent_id,
                         attempt_number=attempt_number,
+                        request_id=request_id,
+                        event_type=event_type or EVENT_PAYMENT_FAILED,
                     )
 
                 if human_approved is False:
@@ -452,6 +508,8 @@ class SafeAgentWallet:
                         timestamp=now_iso,
                         agent_id=agent_id,
                         attempt_number=attempt_number,
+                        request_id=request_id,
+                        event_type=event_type or EVENT_HUMAN_REJECTION,
                     )
 
                 if human_approved is True:
@@ -470,6 +528,8 @@ class SafeAgentWallet:
                             timestamp=now_iso,
                             agent_id=agent_id,
                             attempt_number=attempt_number,
+                            request_id=request_id,
+                            event_type=event_type or EVENT_AUTH_FAILED,
                         )
 
             # -------------------------------------------------------------
@@ -493,6 +553,8 @@ class SafeAgentWallet:
                     timestamp=now_iso,
                     agent_id=agent_id,
                     attempt_number=attempt_number,
+                    request_id=request_id,
+                    event_type=event_type or EVENT_PAYMENT_FAILED,
                 )
 
             # -------------------------------------------------------------
@@ -518,6 +580,8 @@ class SafeAgentWallet:
                     timestamp=now_iso,
                     agent_id=agent_id,
                     attempt_number=attempt_number,
+                    request_id=request_id,
+                    event_type=event_type or EVENT_PAYMENT_FAILED,
                 )
 
             # -------------------------------------------------------------
@@ -527,6 +591,7 @@ class SafeAgentWallet:
             self._balance -= validated_amount
             self._total_spent += validated_amount
 
+            evt = event_type or (EVENT_HUMAN_APPROVAL if human_approved is True else EVENT_PAYMENT_SUCCESS)
             return self._record_result(
                 tx_id=tx_id,
                 amount=validated_amount,
@@ -538,6 +603,8 @@ class SafeAgentWallet:
                 timestamp=now_iso,
                 agent_id=agent_id,
                 attempt_number=attempt_number,
+                request_id=request_id,
+                event_type=evt,
             )
 
     def pay(
@@ -551,6 +618,8 @@ class SafeAgentWallet:
         attempt_number: Optional[int] = None,
         current_time: Optional[float] = None,
         is_agent_attempt: bool = True,
+        request_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> PaymentResult:
         """Convenience alias for execute_payment."""
         return self.execute_payment(
@@ -563,6 +632,8 @@ class SafeAgentWallet:
             attempt_number=attempt_number,
             current_time=current_time,
             is_agent_attempt=is_agent_attempt,
+            request_id=request_id,
+            event_type=event_type,
         )
 
     def simulate_runaway_agent_attack(

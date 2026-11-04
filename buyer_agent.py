@@ -237,6 +237,7 @@ class BuyerAgent:
             human_approved=human_approved,
             auth_token=auth_token,
             agent_id="SafeAgent Buyer Bot v1.0",
+            request_id=seller_response.order_id,
         )
 
         # -----------------------------------------------------------------

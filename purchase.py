@@ -349,6 +349,8 @@ class ApprovalCenter:
                 auth_token=auth_token,
                 agent_id=req.buyer_agent,
                 is_agent_attempt=False,
+                request_id=req.request_id,
+                event_type=config.EVENT_HUMAN_APPROVAL,
             )
 
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -404,6 +406,8 @@ class ApprovalCenter:
                 human_approved=False,
                 agent_id=req.buyer_agent,
                 is_agent_attempt=False,
+                request_id=req.request_id,
+                event_type=config.EVENT_HUMAN_REJECTION,
             )
 
             return True, f"Request '{request_id}' rejected successfully. No funds were deducted."

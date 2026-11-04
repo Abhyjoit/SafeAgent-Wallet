@@ -13,6 +13,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 TRANSACTIONS_FILE = DATA_DIR / "transactions.json"
+DATABASE_FILE = DATA_DIR / "safeagent.db"
 
 # Financial Rules & Limits
 # Using Decimal to avoid floating-point rounding inaccuracies in financial calculations.
@@ -39,3 +40,12 @@ STATUS_BLOCKED = "BLOCKED"
 # Blocked & Security Reasons
 REASON_RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
 REASON_WALLET_LOCKED = "WALLET_LOCKED"
+
+# Audit Log Event Types
+EVENT_PAYMENT_SUCCESS = "PAYMENT_SUCCESS"
+EVENT_HUMAN_APPROVAL = "HUMAN_APPROVAL"
+EVENT_HUMAN_REJECTION = "HUMAN_REJECTION"
+EVENT_PAYMENT_FAILED = "PAYMENT_FAILED"
+EVENT_AUTH_FAILED = "AUTH_FAILED"
+EVENT_RUNAWAY_BLOCKED = "RUNAWAY_BLOCKED"
+EVENT_WALLET_LOCKED = "WALLET_LOCKED"
