@@ -223,151 +223,242 @@ st.markdown(
         color: #64748B;
     }
 
-    /* SafeAgent UI refresh — visual-only overrides; application logic unchanged */
+    /* SafeAgent Wallet — Modern AI SaaS / Light / Purple visual system */
     :root {
         color-scheme: light;
-        --sa-ink: #172033;
-        --sa-muted: #64748B;
-        --sa-border: #E5EAF2;
+        --sa-ink: #211B35;
+        --sa-muted: #77718D;
+        --sa-border: #EAE6F3;
         --sa-surface: #FFFFFF;
-        --sa-canvas: #F3F6FB;
-        --sa-primary: #4F46E5;
-        --sa-primary-dark: #3730A3;
+        --sa-canvas: #F8F7FC;
+        --sa-primary: #7656E8;
+        --sa-primary-dark: #6040D2;
+        --sa-lilac: #F1ECFF;
+        --sa-shadow: 0 8px 28px rgba(42, 26, 86, .055);
     }
+
     html, body, [class*="css"] {
-        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     .stApp {
-        background: radial-gradient(ellipse at 12% 0%, rgba(99,102,241,.07), transparent 34%), var(--sa-canvas);
+        background:
+            radial-gradient(ellipse at 8% 0%, rgba(156, 126, 255, .11), transparent 32%),
+            radial-gradient(ellipse at 95% 8%, rgba(204, 184, 255, .12), transparent 28%),
+            var(--sa-canvas);
         color: var(--sa-ink) !important;
     }
-    .stApp, .stApp p, .stApp label, .stApp span, .stApp div,
-    .stApp li, .stApp small, .stApp [data-testid="stMarkdownContainer"] {
-        color: inherit;
-    }
+    .stApp [data-testid="stMarkdownContainer"],
     .stApp [data-testid="stMarkdownContainer"] p,
-    .stApp [data-testid="stMarkdownContainer"] li {
-        color: #475569;
+    .stApp [data-testid="stMarkdownContainer"] li,
+    .stApp label, .stApp small {
+        color: var(--sa-ink);
+    }
+    .stApp [data-testid="stMarkdownContainer"] p {
+        color: #625C76;
+        line-height: 1.58;
     }
     [data-testid="stHeader"] {
-        background: rgba(243,246,251,.88);
+        background: rgba(248,247,252,.84);
+        backdrop-filter: blur(14px);
     }
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1540px;
+    }
+
+    /* Sidebar */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFF 100%);
+        background: linear-gradient(180deg, #FFFFFF 0%, #FBFAFF 100%);
         border-right: 1px solid var(--sa-border);
+        box-shadow: 8px 0 28px rgba(40, 25, 80, .025);
     }
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stSidebar"] label,
     [data-testid="stSidebar"] span {
-        color: #334155 !important;
+        color: #514968 !important;
+    }
+    [data-testid="stSidebar"] [role="radiogroup"] {
+        gap: 5px;
     }
     [data-testid="stSidebar"] [role="radiogroup"] label {
-        border-radius: 10px;
-        padding: 7px 10px;
-        transition: background .18s ease;
-    }
-    [data-testid="stSidebar"] [role="radiogroup"] label:hover {
-        background: #EEF2FF;
-    }
-    .fintech-card, .metric-box, .product-grid-card {
-        background: var(--sa-surface);
-        border: 1px solid var(--sa-border);
-        border-radius: 16px;
-        box-shadow: 0 5px 18px rgba(15,23,42,.045);
-        transition: transform .18s ease, box-shadow .18s ease;
-    }
-    .fintech-card:hover, .product-grid-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 26px rgba(15,23,42,.075);
-    }
-    .metric-box {
-        min-height: 116px;
-        padding: 18px 16px;
-    }
-    .metric-box-label {
-        color: #64748B !important;
-        letter-spacing: .075em;
-        font-size: .68rem;
-    }
-    .metric-box-value, .fintech-card-header, .product-grid-title,
-    .product-grid-price, .empty-state-title {
-        color: #172033 !important;
-    }
-    .metric-box-sub, .product-grid-desc, .empty-state-desc {
-        color: #64748B !important;
-    }
-    .fintech-card {
-        padding: 22px;
-        margin-bottom: 18px;
-    }
-    .fintech-card-header {
-        padding-bottom: 12px;
-        border-bottom: 1px solid #EEF1F6;
-        margin-bottom: 14px;
-    }
-    .stButton > button, .stDownloadButton > button {
-        border-radius: 10px;
-        min-height: 42px;
-        font-weight: 650;
-        border: 1px solid #D9E0EC;
+        border: 1px solid transparent;
+        border-radius: 11px;
+        padding: 8px 11px;
         transition: all .18s ease;
     }
+    [data-testid="stSidebar"] [role="radiogroup"] label:hover {
+        background: #F4F0FF;
+        border-color: #E9E1FF;
+    }
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(100deg, #F0EAFF, #F8F5FF);
+        border-color: #E3D9FF;
+    }
+
+    /* Panels and metric cards */
+    .fintech-card, .metric-box, .product-grid-card, .empty-state-box {
+        background: rgba(255,255,255,.94);
+        border: 1px solid var(--sa-border);
+        border-radius: 18px;
+        box-shadow: var(--sa-shadow);
+    }
+    .fintech-card {
+        padding: 22px 23px;
+        margin-bottom: 18px;
+        transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+    .fintech-card:hover, .product-grid-card:hover {
+        border-color: #DCD0FF;
+        box-shadow: 0 13px 34px rgba(74, 48, 139, .085);
+        transform: translateY(-2px);
+    }
+    .fintech-card-header {
+        color: var(--sa-ink) !important;
+        font-size: 1rem;
+        padding-bottom: 13px;
+        border-bottom: 1px solid #F0EDF6;
+        margin-bottom: 14px;
+    }
+    .metric-box {
+        min-height: 118px;
+        padding: 18px 17px;
+        margin-bottom: 13px;
+        transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .metric-box:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 28px rgba(74,48,139,.09);
+    }
+    .metric-box-label {
+        color: #827B96 !important;
+        font-size: .67rem;
+        letter-spacing: .085em;
+        font-weight: 700;
+    }
+    .metric-box-value {
+        color: #28213D !important;
+        font-size: 1.58rem;
+        letter-spacing: -.035em;
+    }
+    .metric-box-sub, .product-grid-desc, .empty-state-desc {
+        color: var(--sa-muted) !important;
+    }
+    .product-grid-card {
+        padding: 19px;
+        min-height: 190px;
+    }
+    .product-grid-title, .product-grid-price, .empty-state-title {
+        color: #28213D !important;
+    }
+    .empty-state-box {
+        padding: 38px 22px;
+        border-style: dashed;
+        background: rgba(255,255,255,.72);
+    }
+
+    /* Status labels */
+    .status-pill {
+        border-radius: 999px;
+        padding: 4px 11px;
+        font-size: .72rem;
+        font-weight: 700;
+        letter-spacing: .015em;
+    }
+    .status-pill-success { background: #E7F8EF; color: #16834D; border: 1px solid #C9EED9; }
+    .status-pill-warning { background: #FFF5DF; color: #A56A0A; border: 1px solid #F6E5B9; }
+    .status-pill-danger { background: #FDECEC; color: #C13C48; border: 1px solid #F7D1D4; }
+    .status-pill-neutral { background: #F2F0F7; color: #686178; border: 1px solid #E6E2ED; }
+
+    /* Buttons and interactive controls */
+    .stButton > button, .stDownloadButton > button {
+        min-height: 42px;
+        border-radius: 11px;
+        font-weight: 650;
+        border: 1px solid #E2DDEE;
+        background: #FFFFFF;
+        color: #433A59 !important;
+        transition: all .18s ease;
+        box-shadow: 0 2px 6px rgba(39, 26, 72, .025);
+    }
     .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #4F46E5, #6366F1);
-        border: 0;
         color: #FFFFFF !important;
-        box-shadow: 0 5px 14px rgba(79,70,229,.20);
+        background: linear-gradient(135deg, #8968F0 0%, #7050DE 100%);
+        border: 0;
+        box-shadow: 0 7px 16px rgba(118,86,232,.22);
     }
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #4338CA, #4F46E5);
-        box-shadow: 0 7px 18px rgba(79,70,229,.28);
+        background: linear-gradient(135deg, #7958E6 0%, #6242CF 100%);
+        box-shadow: 0 9px 22px rgba(118,86,232,.30);
         transform: translateY(-1px);
     }
     .stButton > button:not([kind="primary"]):hover,
     .stDownloadButton > button:hover {
-        border-color: #A5B4FC;
-        color: #3730A3;
-        background: #EEF2FF;
+        background: #F5F1FF;
+        border-color: #CDBEFF;
+        color: #6040C5 !important;
     }
     .stTextInput input, .stTextArea textarea, .stNumberInput input,
-    .stSelectbox [data-baseweb="select"], .stDateInput input {
+    .stDateInput input, .stSelectbox [data-baseweb="select"] {
         background: #FFFFFF !important;
-        color: #172033 !important;
-        border-color: #DCE3EE !important;
-        border-radius: 10px !important;
+        color: #28213D !important;
+        border: 1px solid #E5E0EF !important;
+        border-radius: 11px !important;
+    }
+    .stTextInput input:focus, .stTextArea textarea:focus,
+    .stNumberInput input:focus {
+        border-color: #A58AF5 !important;
+        box-shadow: 0 0 0 3px rgba(137,104,240,.12) !important;
     }
     .stTextInput label, .stTextArea label, .stNumberInput label,
     .stSelectbox label, .stRadio label, .stCheckbox label {
-        color: #334155 !important;
-        font-weight: 550;
+        color: #514968 !important;
+        font-weight: 600;
     }
+
+    /* Tables, alerts, charts and tabs */
     [data-testid="stDataFrame"], [data-testid="stTable"] {
         border: 1px solid var(--sa-border);
-        border-radius: 12px;
+        border-radius: 13px;
         overflow: hidden;
         background: #FFFFFF;
     }
     [data-testid="stAlert"] {
-        border-radius: 12px;
+        border-radius: 13px;
         border-width: 1px;
     }
-    .status-pill {
-        padding: 4px 11px;
-        letter-spacing: .01em;
-    }
-    .empty-state-box {
+    [data-testid="stMetric"] {
+        background: #FFFFFF;
+        border: 1px solid var(--sa-border);
         border-radius: 14px;
-        background: rgba(255,255,255,.78);
+        padding: 13px 15px;
+        box-shadow: 0 4px 15px rgba(42,26,86,.035);
+    }
+    [data-testid="stMetricLabel"] { color: #827B96 !important; }
+    [data-testid="stMetricValue"] { color: #28213D !important; }
+    [data-baseweb="tab-list"] {
+        gap: 7px;
+        border-bottom: 1px solid #EAE6F3;
+    }
+    [data-baseweb="tab"] {
+        border-radius: 9px 9px 0 0;
+        color: #716A84;
+        font-weight: 650;
+    }
+    [aria-selected="true"][data-baseweb="tab"] {
+        color: #6949D4 !important;
     }
     h1, h2, h3, h4 {
-        letter-spacing: -.025em;
-        color: #172033;
+        color: #28213D;
+        letter-spacing: -.035em;
     }
+    hr { border-color: #EAE6F3; }
+
     @media (max-width: 900px) {
-        .metric-box { min-height: 104px; padding: 14px 12px; }
+        [data-testid="stMainBlockContainer"] { padding: 1.1rem 1rem 2rem; }
+        .metric-box { min-height: 105px; padding: 14px 12px; }
         .fintech-card { padding: 16px; }
     }
-
     </style>
     """,
     unsafe_allow_html=True,
