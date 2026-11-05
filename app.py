@@ -222,6 +222,152 @@ st.markdown(
         font-size: 0.82rem;
         color: #64748B;
     }
+
+    /* SafeAgent UI refresh — visual-only overrides; application logic unchanged */
+    :root {
+        color-scheme: light;
+        --sa-ink: #172033;
+        --sa-muted: #64748B;
+        --sa-border: #E5EAF2;
+        --sa-surface: #FFFFFF;
+        --sa-canvas: #F3F6FB;
+        --sa-primary: #4F46E5;
+        --sa-primary-dark: #3730A3;
+    }
+    html, body, [class*="css"] {
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .stApp {
+        background: radial-gradient(ellipse at 12% 0%, rgba(99,102,241,.07), transparent 34%), var(--sa-canvas);
+        color: var(--sa-ink) !important;
+    }
+    .stApp, .stApp p, .stApp label, .stApp span, .stApp div,
+    .stApp li, .stApp small, .stApp [data-testid="stMarkdownContainer"] {
+        color: inherit;
+    }
+    .stApp [data-testid="stMarkdownContainer"] p,
+    .stApp [data-testid="stMarkdownContainer"] li {
+        color: #475569;
+    }
+    [data-testid="stHeader"] {
+        background: rgba(243,246,251,.88);
+    }
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFF 100%);
+        border-right: 1px solid var(--sa-border);
+    }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] span {
+        color: #334155 !important;
+    }
+    [data-testid="stSidebar"] [role="radiogroup"] label {
+        border-radius: 10px;
+        padding: 7px 10px;
+        transition: background .18s ease;
+    }
+    [data-testid="stSidebar"] [role="radiogroup"] label:hover {
+        background: #EEF2FF;
+    }
+    .fintech-card, .metric-box, .product-grid-card {
+        background: var(--sa-surface);
+        border: 1px solid var(--sa-border);
+        border-radius: 16px;
+        box-shadow: 0 5px 18px rgba(15,23,42,.045);
+        transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .fintech-card:hover, .product-grid-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 26px rgba(15,23,42,.075);
+    }
+    .metric-box {
+        min-height: 116px;
+        padding: 18px 16px;
+    }
+    .metric-box-label {
+        color: #64748B !important;
+        letter-spacing: .075em;
+        font-size: .68rem;
+    }
+    .metric-box-value, .fintech-card-header, .product-grid-title,
+    .product-grid-price, .empty-state-title {
+        color: #172033 !important;
+    }
+    .metric-box-sub, .product-grid-desc, .empty-state-desc {
+        color: #64748B !important;
+    }
+    .fintech-card {
+        padding: 22px;
+        margin-bottom: 18px;
+    }
+    .fintech-card-header {
+        padding-bottom: 12px;
+        border-bottom: 1px solid #EEF1F6;
+        margin-bottom: 14px;
+    }
+    .stButton > button, .stDownloadButton > button {
+        border-radius: 10px;
+        min-height: 42px;
+        font-weight: 650;
+        border: 1px solid #D9E0EC;
+        transition: all .18s ease;
+    }
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #4F46E5, #6366F1);
+        border: 0;
+        color: #FFFFFF !important;
+        box-shadow: 0 5px 14px rgba(79,70,229,.20);
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #4338CA, #4F46E5);
+        box-shadow: 0 7px 18px rgba(79,70,229,.28);
+        transform: translateY(-1px);
+    }
+    .stButton > button:not([kind="primary"]):hover,
+    .stDownloadButton > button:hover {
+        border-color: #A5B4FC;
+        color: #3730A3;
+        background: #EEF2FF;
+    }
+    .stTextInput input, .stTextArea textarea, .stNumberInput input,
+    .stSelectbox [data-baseweb="select"], .stDateInput input {
+        background: #FFFFFF !important;
+        color: #172033 !important;
+        border-color: #DCE3EE !important;
+        border-radius: 10px !important;
+    }
+    .stTextInput label, .stTextArea label, .stNumberInput label,
+    .stSelectbox label, .stRadio label, .stCheckbox label {
+        color: #334155 !important;
+        font-weight: 550;
+    }
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
+        border: 1px solid var(--sa-border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #FFFFFF;
+    }
+    [data-testid="stAlert"] {
+        border-radius: 12px;
+        border-width: 1px;
+    }
+    .status-pill {
+        padding: 4px 11px;
+        letter-spacing: .01em;
+    }
+    .empty-state-box {
+        border-radius: 14px;
+        background: rgba(255,255,255,.78);
+    }
+    h1, h2, h3, h4 {
+        letter-spacing: -.025em;
+        color: #172033;
+    }
+    @media (max-width: 900px) {
+        .metric-box { min-height: 104px; padding: 14px 12px; }
+        .fintech-card { padding: 16px; }
+    }
+
     </style>
     """,
     unsafe_allow_html=True,
