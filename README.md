@@ -14,7 +14,7 @@ As autonomous AI agents evolve from informational assistants into economic actor
 
 Giving an AI agent direct, unrestricted API keys to credit cards or treasury accounts is dangerous. Rogue loops, prompt injection, or logic bugs can drain balances in seconds.
 
-**SafeAgent Wallet** solves this by inserting an active security governance layer between the AI agent and the payment settlement layer. Agents cannot execute financial transactions directly; every payment directive must flow through a deterministic policy engine that enforces budget bounds, rate limits, anti-tamper mechanisms, human authorization queues, and an immutable SQLite audit log.
+**SafeAgent Wallet** solves this by inserting an active security governance layer between the AI agent and the payment settlement layer. Agents cannot execute financial transactions directly; every payment directive must flow through a deterministic policy engine that enforces budget bounds, rate limits, anti-tamper mechanisms, human authorization queues, and an persistent SQLite audit log.
 
 ---
 
@@ -62,7 +62,7 @@ SafeAgent Wallet operates a multi-agent marketplace with strict separation of pr
    - **Lifetime Spending Limit ($80.00):** Absolute maximum cumulative allowance. Human approval cannot bypass this cap.
    - **Rolling 60-Second Rate Limiting:** Enforces a maximum of 3 payment requests per rolling 60-second window. A 4th rapid attempt instantly triggers an anti-runaway lockout.
    - **Anti-Tamper Lockout:** 3 invalid authorization attempts lock the wallet permanently until an administrator unlocks it.
-5. **Immutable Audit Persistence:** Every success, human approval, human rejection, balance failure, and blocked attempt is written to an indexed SQLite ledger (`data/safeagent.db`) storing amounts with integer-cent monetary precision.
+5. **Persistent Audit Records:** Every success, human approval, human rejection, balance failure, and blocked attempt is written to an indexed SQLite database (`data/safeagent.db`) storing amounts with integer-cent monetary precision. SQLite persistence alone is not tamper-evident or immutable.
 
 ---
 
@@ -73,7 +73,7 @@ SafeAgent Wallet operates a multi-agent marketplace with strict separation of pr
 - **Dynamic Human Approval Center:** Interactive Streamlit dashboard enabling humans to review pending purchase requests, view order details, and authorize or reject transactions with full state-machine integrity.
 - **Duplicate Payment Prevention:** Cryptographic UUID transaction IDs and database `PRIMARY KEY` constraints prevent double-click or replay vulnerabilities.
 - **Runaway Agent Security Shield:** Rolling 60-second sliding time window detects rogue loops; automatically halts execution on attempt 4 and blocks attempts 5–10 with zero funds lost.
-- **Anti-Tamper Lockout & Isolation:** 3 invalid authorization attempts trigger a security lock. Normal human rejections strictly do *not* count against the invalid auth counter.
+- **Authorization Lockout & Isolation:** 3 invalid authorization attempts trigger a security lock. The approval secret is loaded from the `SAFEAGENT_AUTH_TOKEN` environment variable; no production default is embedded in source code. Normal human rejections do *not* count against the invalid-auth counter.
 - **SQLite Audit Log & UI Ledger:** Complete transaction history querying `data/safeagent.db` with live filters by Status, Event Type (`PAYMENT_SUCCESS`, `HUMAN_APPROVAL`, `HUMAN_REJECTION`, `RUNAWAY_BLOCKED`, etc.), and search.
 - **Modern Fintech UI:** Dark-mode glassmorphic interface inspired by modern fintech security dashboards with live balance cards, trace logs, and an interactive Runaway Agent Simulator.
 
@@ -142,6 +142,9 @@ source .venv/bin/activate
 
 # 3. Install required dependencies
 pip install -r requirements.txt
+
+# 4. Configure the human-approval secret (use your own strong random value)
+export SAFEAGENT_AUTH_TOKEN="replace-with-a-long-random-secret"
 ```
 
 ### Windows (PowerShell)
@@ -156,6 +159,9 @@ python -m venv .venv
 
 # 3. Install required dependencies
 pip install -r requirements.txt
+
+# 4. Configure the human-approval secret for this terminal session
+$env:SAFEAGENT_AUTH_TOKEN = "replace-with-a-long-random-secret"
 ```
 
 ---
@@ -212,7 +218,7 @@ python -m unittest discover -v
 4. Open the **Approval Center** in the sidebar.
 5. Review the invoice, buyer agent identity, and reason.
 6. Click **Approve Transaction**:
-   - The human authorization credential token (`COMMITCON-SECURE-2026`) is verified.
+   - The human authorization secret configured through `SAFEAGENT_AUTH_TOKEN` is verified.
    - Wallet executes the payment: $\$95.50 \rightarrow \$80.50$.
    - Event `HUMAN_APPROVAL` is permanently recorded in `safeagent.db`.
 
