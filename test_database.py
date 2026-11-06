@@ -17,6 +17,9 @@ Tests cover:
 12. test_12_existing_wallet_and_approval_tests_pass: Verifies end-to-end multi-agent purchase lifecycle passes seamlessly with SQLite active.
 """
 
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 from decimal import Decimal
 import json
 import os
@@ -26,9 +29,6 @@ import tempfile
 import unittest
 
 from buyer_agent import BuyerAgent
-import os
-os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
-
 import config
 from database import DatabaseManager, cents_to_dollars, dollars_to_cents
 from marketplace import Marketplace
