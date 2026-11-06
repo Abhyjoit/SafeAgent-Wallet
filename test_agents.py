@@ -23,6 +23,9 @@ import tempfile
 import unittest
 
 from buyer_agent import BuyerAgent
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 import config
 from marketplace import Marketplace, Product
 from purchase import ApprovalCenter, ApprovalRequest, PurchaseFlowResult
