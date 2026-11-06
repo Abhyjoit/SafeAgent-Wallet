@@ -147,7 +147,8 @@ class AuthorizationGuard:
         expected_token: Optional[str] = None,
     ):
         self.max_invalid_attempts = max_invalid_attempts
-        self.expected_token = expected_token
+        normalized_token = expected_token.strip() if isinstance(expected_token, str) else None
+        self.expected_token = normalized_token or None
         self._invalid_attempts: int = 0
         self._is_locked: bool = False
         self._lock_reason: Optional[str] = None
