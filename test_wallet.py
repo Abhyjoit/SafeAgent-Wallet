@@ -27,6 +27,9 @@ import threading
 import time
 import unittest
 
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 import config
 from security import AuthorizationGuard, RateLimiter, validate_amount
 from transactions import Transaction, TransactionManager
