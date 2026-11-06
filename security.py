@@ -15,7 +15,6 @@ import time
 from typing import Any, Callable, Optional, Tuple
 
 from config import (
-    DEFAULT_AUTH_TOKEN,
     MAX_INVALID_AUTH_ATTEMPTS,
     RATE_LIMIT_MAX_REQUESTS,
     RATE_LIMIT_WINDOW_SECONDS,
@@ -145,7 +144,7 @@ class AuthorizationGuard:
     def __init__(
         self,
         max_invalid_attempts: int = MAX_INVALID_AUTH_ATTEMPTS,
-        expected_token: str = DEFAULT_AUTH_TOKEN,
+        expected_token: Optional[str] = None,
     ):
         self.max_invalid_attempts = max_invalid_attempts
         self.expected_token = expected_token
@@ -186,7 +185,7 @@ class AuthorizationGuard:
             if self._is_locked:
                 return False, "Wallet is locked due to 3 invalid authorization attempts. Operations halted."
 
-            if auth_token is not None and auth_token == self.expected_token:
+            if self.expected_token is not None and auth_token is not None and auth_token == self.expected_token:
                 # Reset consecutive invalid attempts upon successful authorization
                 self._invalid_attempts = 0
                 return True, "Human authorization verified successfully."
