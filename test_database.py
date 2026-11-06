@@ -26,6 +26,9 @@ import tempfile
 import unittest
 
 from buyer_agent import BuyerAgent
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 import config
 from database import DatabaseManager, cents_to_dollars, dollars_to_cents
 from marketplace import Marketplace
