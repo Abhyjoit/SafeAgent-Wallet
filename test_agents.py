@@ -15,6 +15,9 @@ Tests the 10 core scenarios:
 10. Wallet spending limit protection (Lifetime limit of $80 strictly enforced).
 """
 
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -23,9 +26,6 @@ import tempfile
 import unittest
 
 from buyer_agent import BuyerAgent
-import os
-os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
-
 import config
 from marketplace import Marketplace, Product
 from purchase import ApprovalCenter, ApprovalRequest, PurchaseFlowResult
