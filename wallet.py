@@ -114,7 +114,7 @@ class SafeAgentWallet:
         spending_limit: Decimal = LIFETIME_SPENDING_LIMIT,
         auto_threshold: Decimal = AUTO_PAYMENT_THRESHOLD,
         transactions_file: Path = TRANSACTIONS_FILE,
-        auth_token: str = DEFAULT_AUTH_TOKEN,
+        auth_token: Optional[str] = DEFAULT_AUTH_TOKEN,
         load_existing: bool = True,
         db_path: Optional[Path] = None,
     ):
