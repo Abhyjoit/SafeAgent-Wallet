@@ -13,6 +13,9 @@ from typing import Dict, Generator
 
 import pytest
 
+# Keep test credentials isolated from real application configuration.
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
