@@ -14,7 +14,43 @@ from decimal import Decimal
 import pytest
 
 import config
+from security import AuthorizationGuard
 from wallet import SafeAgentWallet
+
+
+
+class TestMissingAuthorizationSecret:
+    """A wallet without configured secret must fail closed."""
+
+    def test_guard_rejects_any_token_when_secret_is_missing(self):
+        guard = AuthorizationGuard(expected_token=None)
+
+        ok, message = guard.verify_authorization("anything")
+
+        assert ok is False
+        assert "Invalid human authorization" in message
+        assert guard.invalid_attempts == 1
+
+    def test_missing_secret_cannot_authorize_high_value_payment(
+        self, temp_db_path, temp_json_path
+    ):
+        wallet_without_secret = SafeAgentWallet(
+            db_path=temp_db_path,
+            transactions_file=temp_json_path,
+            auth_token=None,
+            load_existing=False,
+        )
+
+        result = wallet_without_secret.execute_payment(
+            Decimal("15.00"),
+            "Protected purchase",
+            human_approved=True,
+            auth_token="anything",
+        )
+
+        assert result.success is False
+        assert wallet_without_secret.balance == Decimal("100.00")
+        assert wallet_without_secret.invalid_auth_attempts == 1
 
 
 class TestAntiTamperLockout:
