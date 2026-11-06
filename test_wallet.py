@@ -18,6 +18,9 @@ Verifies all 13 core requirements and technical constraints:
 13. Human approval must not bypass any security checks.
 """
 
+import os
+os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
+
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -26,9 +29,6 @@ import tempfile
 import threading
 import time
 import unittest
-
-import os
-os.environ.setdefault("SAFEAGENT_AUTH_TOKEN", "test-only-token")
 
 import config
 from security import AuthorizationGuard, RateLimiter, validate_amount
