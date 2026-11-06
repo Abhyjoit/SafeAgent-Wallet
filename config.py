@@ -31,7 +31,8 @@ RATE_LIMIT_WINDOW_SECONDS = 60.0
 # Wallet locks permanently/until reset after 3 invalid authorization attempts.
 MAX_INVALID_AUTH_ATTEMPTS = 3
 # Set SAFEAGENT_AUTH_TOKEN in the environment. Never commit a real authorization secret.
-DEFAULT_AUTH_TOKEN = os.getenv("SAFEAGENT_AUTH_TOKEN")
+_configured_auth_token = os.getenv("SAFEAGENT_AUTH_TOKEN", "").strip()
+DEFAULT_AUTH_TOKEN = _configured_auth_token or None
 
 # Transaction Statuses
 STATUS_SUCCESS = "SUCCESS"
