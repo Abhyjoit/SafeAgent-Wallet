@@ -94,6 +94,7 @@ def wallet(temp_db_path: Path, temp_json_path: Path) -> SafeAgentWallet:
         initial_balance=Decimal("100.00"),
         db_path=temp_db_path,
         transactions_file=temp_json_path,
+        auth_token="test-only-token",
         load_existing=False,
     )
 
