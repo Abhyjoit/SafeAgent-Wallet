@@ -6,6 +6,7 @@ This module defines all security limits, financial thresholds, rate limits,
 and file paths for SafeAgent Wallet.
 """
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,7 +30,8 @@ RATE_LIMIT_WINDOW_SECONDS = 60.0
 # Human Authorization Protection
 # Wallet locks permanently/until reset after 3 invalid authorization attempts.
 MAX_INVALID_AUTH_ATTEMPTS = 3
-DEFAULT_AUTH_TOKEN = "COMMITCON-SECURE-2026"
+# Set SAFEAGENT_AUTH_TOKEN in the environment. Never commit a real authorization secret.
+DEFAULT_AUTH_TOKEN = os.getenv("SAFEAGENT_AUTH_TOKEN")
 
 # Transaction Statuses
 STATUS_SUCCESS = "SUCCESS"
