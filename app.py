@@ -44,6 +44,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+if not config.DEFAULT_AUTH_TOKEN:
+    st.warning(
+        "Human approvals are disabled because SAFEAGENT_AUTH_TOKEN is not configured. "
+        "Set the environment variable and restart the app to enable protected payments.",
+        icon="🔐",
+    )
+
 # Professional Fintech Light CSS Theme
 st.markdown(
     """
